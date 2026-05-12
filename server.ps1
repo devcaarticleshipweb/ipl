@@ -552,6 +552,10 @@ function Handle-BetsApi {
     if ($null -eq $Liability -or $Liability -le 0) {
       $Liability = if ($IsFancy) { Get-FancyLiability -Stake $Stake -Rate $Rate -Side $Body.side } else { $Stake }
     }
+    $EstimatedProfit = Get-NumericValue -Value $Body.estimatedProfit
+    if ($null -eq $EstimatedProfit) {
+      $EstimatedProfit = if ($IsFancy) { Get-FancyProfit -Stake $Stake -Rate $Rate -Side $Body.side } else { Get-BetProfit -Stake $Stake -Odds $Odds }
+    }
 
     $Ledger = Get-BettingLedger
     $Users = @($Ledger["users"])
@@ -584,7 +588,7 @@ function Handle-BetsApi {
       rate = if ($IsFancy) { $Rate } else { "" }
       stake = $Stake
       liability = $Liability
-      estimatedProfit = if ($IsFancy) { Get-FancyProfit -Stake $Stake -Rate $Rate -Side $Body.side } else { Get-BetProfit -Stake $Stake -Odds $Odds }
+      estimatedProfit = $EstimatedProfit
       status = "PENDING"
       result = ""
       pnl = 0

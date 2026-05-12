@@ -257,6 +257,7 @@ function placeBet(payload) {
     const target = isFancy ? toNumber(payload.target || payload.run || payload.odds, "") : "";
     const rate = isFancy ? toNumber(payload.rate, "") : "";
     const liability = toNumber(payload.liability, payload.marketType === "FANCY" ? fancyLiability(stake, rate, payload.side) : stake);
+    const estimatedProfit = toNumber(payload.estimatedProfit, payload.marketType === "FANCY" ? fancyProfit(stake, rate, payload.side) : betProfit(stake, odds));
     if (!username || stake === null || stake <= 0 || odds === null || odds <= 0) {
       return { statusCode: 400, error: "Valid username, stake and odds are required." };
     }
@@ -286,7 +287,7 @@ function placeBet(payload) {
       rate,
       stake,
       liability,
-      estimatedProfit: payload.marketType === "FANCY" ? fancyProfit(stake, rate, payload.side) : betProfit(stake, odds),
+      estimatedProfit,
       status: "PENDING",
       result: "",
       pnl: 0,

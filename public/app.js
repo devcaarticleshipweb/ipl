@@ -1700,6 +1700,13 @@ function fancyProfit(stake, rate, side = "Yes") {
   return side === "Yes" ? fancyRateAmount(stake, rate) : Number(stake);
 }
 
+function bookmakerRateAmount(stake, odds) {
+  const stakeValue = Number(stake);
+  const oddsValue = Number(odds);
+  if (!Number.isFinite(stakeValue) || !Number.isFinite(oddsValue)) return 0;
+  return Number((oddsValue > 20 ? (stakeValue * oddsValue) / 100 : stakeValue * Math.max(0, oddsValue - 1)).toFixed(2));
+}
+
 function betRunValue(bet) {
   return bet?.run || bet?.target || bet?.odds || "";
 }
@@ -1823,8 +1830,9 @@ async function executePlaceBet(rowData, side, odds, rate, stake) {
       throw new Error(`Bet rejected. Rate changed from ${rate} to ${latestRate}.`);
     }
 
-    const liability = fancyMode ? fancyLiability(stake, rate, side) : stake;
-    const estimatedProfit = fancyMode ? fancyProfit(stake, rate, side) : "";
+    const bookmakerRate = bookmakerRateAmount(stake, numericOdds);
+    const liability = fancyMode ? fancyLiability(stake, rate, side) : (side === "Lay" ? bookmakerRate : stake);
+    const estimatedProfit = fancyMode ? fancyProfit(stake, rate, side) : (side === "Lay" ? stake : bookmakerRate);
     const run = fancyMode ? numericOdds : "";
     const rateValue = fancyMode ? Number(rate) : "";
 
@@ -1900,6 +1908,46 @@ function createPriceBox(kind, key, price, size, rowData, sideLabel) {
   return box;
 }
 
+function visibleBookmakerBets() {
+  const session = currentSession();
+  if (!session) return [];
+  const isMaster = isMasterSession();
+  return (bettingLedger.bets || []).filter((bet) => {
+    if (bet.marketType !== "BOOKMAKER") return false;
+    if (String(bet.eventId || "") !== String(selectedEventId || "")) return false;
+    if (bet.status && bet.status !== "PENDING") return false;
+    return isMaster || String(bet.username).toLowerCase() === String(session.username).toLowerCase();
+  });
+}
+
+function bookmakerPositionForRunner(rowData) {
+  const isMaster = isMasterSession();
+  const userPnl = visibleBookmakerBets().reduce((sum, bet) => {
+    const stake = Number(bet.stake);
+    const rateAmount = Number(bet.estimatedProfit || bookmakerRateAmount(stake, bet.odds));
+    const liability = Number(bet.liability || rateAmount);
+    if (!Number.isFinite(stake)) return sum;
+
+    const isSelectedRunner = bet.marketKey === rowData.key;
+    if (bet.side === "Back") {
+      return sum + (isSelectedRunner ? rateAmount : -stake);
+    }
+    if (bet.side === "Lay") {
+      return sum + (isSelectedRunner ? -liability : stake);
+    }
+    return sum;
+  }, 0);
+  return isMaster ? -userPnl : userPnl;
+}
+
+function createBookmakerPositionNode(value) {
+  if (!Number.isFinite(value) || value === 0) return null;
+  const node = document.createElement("span");
+  node.className = `bookmaker-position ${value < 0 ? "loss" : "profit"}`;
+  node.textContent = `${value < 0 ? "-" : "+"}${displayMoney(Math.abs(value))}`;
+  return node;
+}
+
 function createMarketSection(title, columns, rows, fancyMode = false) {
   const section = document.createElement("section");
   section.className = "market-section";
@@ -1920,13 +1968,20 @@ function createMarketSection(title, columns, rows, fancyMode = false) {
     nameCell.className = "name-cell";
     const left = document.createElement("div");
     left.className = "name-wrap";
+    const nameLine = document.createElement("div");
+    nameLine.className = "name-line";
     const name = document.createElement("span");
     name.className = "name-text";
     name.textContent = simpleValue(rowData.label);
+    nameLine.append(name);
+    if (!fancyMode) {
+      const positionNode = createBookmakerPositionNode(bookmakerPositionForRunner(rowData));
+      if (positionNode) nameLine.append(positionNode);
+    }
     const minMax = document.createElement("span");
     minMax.className = "seen-range";
     minMax.textContent = `Min ${simpleValue(range.min)} | Max ${simpleValue(range.max)}`;
-    left.append(name, minMax);
+    left.append(nameLine, minMax);
     if (fancyMode && hasFancyLadder(rowData.key)) {
       const ladder = document.createElement("button");
       ladder.type = "button";

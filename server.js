@@ -295,6 +295,7 @@ async function handleBets(req, res) {
     const target = isFancy ? (numericValue(body.target) ?? numericValue(body.run) ?? odds) : "";
     const rate = isFancy ? numericValue(body.rate) : null;
     const liability = numericValue(body.liability) || (body.marketType === "FANCY" ? fancyLiability(stake, rate, body.side) : stake);
+    const estimatedProfit = numericValue(body.estimatedProfit) || (body.marketType === "FANCY" ? fancyProfit(stake, rate, body.side) : betProfit(stake, odds));
     if (!username || !stake || stake <= 0 || !odds || odds <= 0) {
       return sendJson(res, 400, { error: "Valid username, stake and odds are required." });
     }
@@ -321,7 +322,7 @@ async function handleBets(req, res) {
       rate: isFancy ? rate : "",
       stake,
       liability,
-      estimatedProfit: body.marketType === "FANCY" ? fancyProfit(stake, rate, body.side) : betProfit(stake, odds),
+      estimatedProfit,
       status: "PENDING",
       result: "",
       pnl: 0,
