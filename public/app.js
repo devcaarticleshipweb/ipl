@@ -52,6 +52,7 @@ let bettingLedger = {
   summary: []
 };
 let pendingStatsRows = [];
+let lastAuthError = "";
 let supabaseRealtime = {
   client: null,
   channel: null,
@@ -264,6 +265,7 @@ function validateLogin(username, password) {
 }
 
 async function authenticateLogin(username, password) {
+  lastAuthError = "";
   if (ledgerFetchPromise) {
     await Promise.race([
       ledgerFetchPromise,
@@ -274,8 +276,6 @@ async function authenticateLogin(username, password) {
   const sheetUser = validateLogin(username, password);
   if (sheetUser) return sheetUser;
 
-  if (!supabaseRealtime.enabled) return null;
-
   try {
     const response = await fetch(`/api/betting-auth?_=${Date.now()}`, {
       method: "POST",
@@ -284,8 +284,13 @@ async function authenticateLogin(username, password) {
       body: JSON.stringify({ username, password })
     });
     const payload = await response.json();
+    if (!response.ok) {
+      lastAuthError = payload.detail || payload.error || "Backend authentication failed.";
+      return null;
+    }
     return response.ok ? payload.user : null;
-  } catch {
+  } catch (error) {
+    lastAuthError = error.message || "Backend authentication request failed.";
     return null;
   }
 }
@@ -2491,7 +2496,7 @@ loginForm.addEventListener("submit", async (event) => {
 
   const user = await authenticateLogin(username, password);
   if (!user) {
-    loginError.textContent = `Invalid username or password. Loaded credential rows: ${loginRows.length}`;
+    loginError.textContent = `Invalid username or password. Loaded credential rows: ${loginRows.length}${lastAuthError ? `. Backend: ${lastAuthError}` : ""}`;
     return;
   }
 
