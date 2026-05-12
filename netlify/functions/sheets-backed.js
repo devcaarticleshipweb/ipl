@@ -15,7 +15,7 @@ async function runSheetsAction(event, forcedAction = "") {
   const action = String(forcedAction || event.queryStringParameters?.action || "").trim();
   const payload = event.httpMethod === "GET" ? {} : JSON.parse(event.body || "{}");
 
-  if (isSupabaseConfigured() && ["getLedger", "auth", "createUser", "placeBet", "settleBet"].includes(action)) {
+  if (isSupabaseConfigured() && ["getLedger", "auth", "createUser", "adjustFunds", "placeBet", "settleBet"].includes(action)) {
     try {
       const result = await runSupabaseAction(action, payload);
       return json(Number(result.statusCode || 200), result);

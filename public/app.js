@@ -1708,38 +1708,97 @@ function betRateValue(bet) {
   return bet?.rate || "";
 }
 
-async function placeBet(rowData, side, odds, rate = "") {
+function showToast(message, type = "info") {
+  const existing = document.querySelector(".toast");
+  if (existing) existing.remove();
+
+  const toast = document.createElement("div");
+  toast.className = `toast ${type}`;
+  toast.textContent = message;
+  document.body.append(toast);
+  requestAnimationFrame(() => toast.classList.add("show"));
+  window.setTimeout(() => {
+    toast.classList.remove("show");
+    window.setTimeout(() => toast.remove(), 220);
+  }, 2800);
+}
+
+function showBetEntryModal(rowData, side, odds, rate = "") {
+  const existing = document.querySelector(".bet-entry-layer");
+  if (existing) existing.remove();
+
+  const fancyMode = isFancyBet(rowData);
+  const layer = document.createElement("div");
+  layer.className = "bet-entry-layer";
+
+  const modal = document.createElement("form");
+  modal.className = "bet-entry-modal";
+  modal.innerHTML = `
+    <div class="bet-entry-top">
+      <div class="bet-entry-meta">
+        <span>${simpleValue(side)}</span>
+        <strong>${simpleValue(fancyMode ? odds : rowData.label)}</strong>
+        <small>${fancyMode ? `Odd ${simpleValue(rate)}` : `Odd ${simpleValue(odds)}`}</small>
+      </div>
+      <label class="bet-entry-amount">
+        <span>Amount</span>
+        <input type="text" inputmode="numeric" autocomplete="off" placeholder="0" autofocus>
+      </label>
+    </div>
+    <div class="bet-entry-market">${simpleValue(rowData.label)}</div>
+    <div class="bet-entry-actions">
+      <button type="button" class="bet-entry-cancel">Cancel</button>
+      <button type="submit" class="bet-entry-submit">Place Bet</button>
+    </div>
+  `;
+
+  const input = modal.querySelector("input");
+  const cancel = modal.querySelector(".bet-entry-cancel");
+  const submit = modal.querySelector(".bet-entry-submit");
+
+  input.addEventListener("input", () => {
+    input.value = input.value.replace(/\D/g, "");
+  });
+  cancel.addEventListener("click", () => layer.remove());
+  modal.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const stake = Number(input.value);
+    if (!Number.isFinite(stake) || stake <= 0) {
+      showToast("Please enter a valid amount.", "error");
+      input.focus();
+      return;
+    }
+
+    submit.disabled = true;
+    cancel.disabled = true;
+    submit.textContent = "Placing...";
+    const result = await executePlaceBet(rowData, side, odds, rate, stake);
+    showToast(result.message, result.ok ? "success" : "error");
+    layer.remove();
+  });
+
+  layer.append(modal);
+  document.body.append(layer);
+  input.focus();
+}
+
+async function executePlaceBet(rowData, side, odds, rate, stake) {
   const session = currentSession();
   if (!session) {
     setLoginVisible(true);
-    return;
+    return { ok: false, message: "Login required." };
   }
 
   if (!isActiveStatus(rowData.status)) {
-    alert(`Bet cannot be placed because this market is ${simpleValue(rowData.status)}.`);
-    return;
+    return { ok: false, message: `Bet cannot be placed because this market is ${simpleValue(rowData.status)}.` };
   }
 
   const numericOdds = toNum(odds);
   if (numericOdds === null || numericOdds <= 0) {
-    alert("Bet cannot be placed because odds are not available.");
-    return;
+    return { ok: false, message: "Bet cannot be placed because odds are not available." };
   }
 
   const fancyMode = isFancyBet(rowData);
-  const rawStake = window.prompt(
-    fancyMode
-      ? `Stake for ${rowData.label}\n${side} ${odds}/${rate}`
-      : `Stake for ${rowData.label}\n${side} @ ${odds}`,
-    "100"
-  );
-  if (rawStake === null) return;
-
-  const stake = Number(rawStake);
-  if (!Number.isFinite(stake) || stake <= 0) {
-    alert("Please enter a valid stake amount.");
-    return;
-  }
 
   try {
     const latestResponse = await fetch(`/api/event-fancy?id=${encodeURIComponent(selectedEventId)}&_=${Date.now()}`, { cache: "no-store" });
@@ -1793,12 +1852,16 @@ async function placeBet(rowData, side, odds, rate = "") {
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.detail || payload.error || "Unable to place bet.");
-    await fetchBettingLedger();
+    await fetchBettingLedger({ force: true });
     renderCurrentData();
-    alert(`Bet placed. Bet ID: ${payload.bet.id}`);
+    return { ok: true, message: `Bet placed. Bet ID: ${payload.bet.id}` };
   } catch (error) {
-    alert(error.message);
+    return { ok: false, message: error.message };
   }
+}
+
+async function placeBet(rowData, side, odds, rate = "") {
+  showBetEntryModal(rowData, side, odds, rate);
 }
 
 function createPriceBox(kind, key, price, size, rowData, sideLabel) {
@@ -2029,6 +2092,34 @@ async function createUserFromPrompt() {
   }
 }
 
+async function adjustUserFunds(username, mode) {
+  if (!isMasterSession()) return;
+
+  const label = mode === "ADD" ? "Add funds" : "Remove funds";
+  const rawAmount = window.prompt(`${label} for ${username}`, "1000");
+  if (rawAmount === null) return;
+
+  const amount = Number(rawAmount);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    alert("Please enter a valid amount.");
+    return;
+  }
+
+  try {
+    const response = await fetch("/api/funds", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username, mode, amount })
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || payload.error || "Unable to adjust funds.");
+    await fetchBettingLedger({ force: true });
+    renderCurrentData();
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
 async function settleBet(betId, result) {
   if (!isMasterSession()) return;
 
@@ -2195,7 +2286,7 @@ function createBettingPanel() {
         <div class="ledger-table-wrap">
           <h3>User Performance</h3>
           <table class="ledger-table">
-            <thead><tr><th>User</th><th>Balance</th><th>Stake</th><th>Exposure</th><th>P/L</th><th>Bets</th></tr></thead>
+            <thead><tr><th>User</th><th>Balance</th><th>Stake</th><th>Exposure</th><th>P/L</th><th>Bets</th><th>Funds</th></tr></thead>
             <tbody>
               <tr>
                 <td><strong>MASTER BOOK</strong></td>
@@ -2204,6 +2295,7 @@ function createBettingPanel() {
                 <td>${displayMoney(masterSummary.exposure)}</td>
                 <td class="${Number(masterSummary.pnl || 0) < 0 ? "loss" : "profit"}">${displayMoney(masterSummary.pnl)}</td>
                 <td>${simpleValue(masterSummary.betCount)}</td>
+                <td>-</td>
               </tr>
               ${performanceRows.map((row) => `
                 <tr>
@@ -2213,8 +2305,12 @@ function createBettingPanel() {
                   <td>${displayMoney(row.exposure)}</td>
                   <td class="${Number(row.pnl || 0) < 0 ? "loss" : "profit"}">${displayMoney(row.pnl)}</td>
                   <td>${simpleValue(row.betCount)}</td>
+                  <td>
+                    <button type="button" class="fund-btn" data-user="${simpleValue(row.username)}" data-mode="ADD">Add</button>
+                    <button type="button" class="fund-btn remove" data-user="${simpleValue(row.username)}" data-mode="REMOVE">Remove</button>
+                  </td>
                 </tr>
-              `).join("") || '<tr><td colspan="6">No users yet.</td></tr>'}
+              `).join("") || '<tr><td colspan="7">No users yet.</td></tr>'}
             </tbody>
           </table>
         </div>
@@ -2249,6 +2345,9 @@ function createBettingPanel() {
   `;
 
   section.querySelector(".create-user-btn")?.addEventListener("click", createUserFromPrompt);
+  section.querySelectorAll(".fund-btn").forEach((button) => {
+    button.addEventListener("click", () => adjustUserFunds(button.dataset.user, button.dataset.mode));
+  });
   section.querySelectorAll(".settle-btn").forEach((button) => {
     button.addEventListener("click", () => settleBet(button.dataset.betId, button.dataset.result));
   });

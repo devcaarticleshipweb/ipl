@@ -143,6 +143,29 @@ async function createUser(payload) {
   return { user: appUser(inserted[0]), backend: "supabase" };
 }
 
+async function adjustFunds(payload) {
+  const username = String(payload.username || "").trim();
+  const amount = toNumber(payload.amount, null);
+  const mode = String(payload.mode || "").toUpperCase();
+  if (!username || amount === null || amount <= 0 || !["ADD", "REMOVE"].includes(mode)) {
+    return { statusCode: 400, error: "Valid username, amount and mode are required." };
+  }
+
+  const users = await supabaseFetch(`/rest/v1/users?select=*&username=eq.${encodeURIComponent(username)}&limit=1`);
+  const user = users?.[0];
+  if (!user) return { statusCode: 404, error: "User not found." };
+
+  const balance = toNumber(user.balance, 0);
+  const nextBalance = mode === "ADD" ? balance + amount : balance - amount;
+  if (nextBalance < 0) return { statusCode: 400, error: "Cannot remove more than available balance." };
+
+  const updated = await supabaseFetch(`/rest/v1/users?username=eq.${encodeURIComponent(username)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ balance: money(nextBalance) })
+  });
+  return { user: appUser(updated[0]), ledger: await getLedger(), backend: "supabase" };
+}
+
 async function placeBet(payload) {
   const username = String(payload.username || "").trim();
   const stake = toNumber(payload.stake, null);
@@ -237,6 +260,7 @@ async function runSupabaseAction(action, payload = {}) {
   if (action === "getLedger") return getLedger();
   if (action === "auth") return auth(payload);
   if (action === "createUser") return createUser(payload);
+  if (action === "adjustFunds") return adjustFunds(payload);
   if (action === "placeBet") return placeBet(payload);
   if (action === "settleBet") return settleBet(payload);
   return { statusCode: 404, error: "Unknown Supabase action." };

@@ -24,6 +24,7 @@ function doPost(e) {
     if (action === "getLedger") return jsonResponse(publicLedger());
     if (action === "auth") return jsonResponse(authUser(payload));
     if (action === "createUser") return jsonResponse(createUser(payload));
+    if (action === "adjustFunds") return jsonResponse(adjustFunds(payload));
     if (action === "placeBet") return jsonResponse(placeBet(payload));
     if (action === "settleBet") return jsonResponse(settleBet(payload));
 
@@ -212,6 +213,33 @@ function createUser(payload) {
     appendRecord(SHEETS.users, HEADERS.users, user);
     appendRecord(SHEETS.login, HEADERS.login, { username, password, name, role: "user" });
     return { user: { username, name, role: "user", balance } };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function adjustFunds(payload) {
+  const lock = LockService.getDocumentLock();
+  lock.waitLock(10000);
+  try {
+    const username = String(payload.username || "").trim();
+    const amount = toNumber(payload.amount, null);
+    const mode = String(payload.mode || "").toUpperCase();
+    if (!username || amount === null || amount <= 0 || ["ADD", "REMOVE"].indexOf(mode) === -1) {
+      return { statusCode: 400, error: "Valid username, amount and mode are required." };
+    }
+
+    const users = readRows(SHEETS.users, HEADERS.users);
+    const user = users.find((row) => String(row.username).toLowerCase() === username.toLowerCase());
+    if (!user) return { statusCode: 404, error: "User not found." };
+
+    const balance = toNumber(user.balance, 0);
+    const nextBalance = mode === "ADD" ? balance + amount : balance - amount;
+    if (nextBalance < 0) return { statusCode: 400, error: "Cannot remove more than available balance." };
+
+    user.balance = Number(nextBalance.toFixed(2));
+    writeRecord(SHEETS.users, HEADERS.users, user._row, user);
+    return { user: { username: user.username, name: user.name, role: user.role, balance: user.balance }, ledger: publicLedger() };
   } finally {
     lock.releaseLock();
   }

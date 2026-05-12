@@ -38,6 +38,11 @@
   status = 200
 
 [[redirects]]
+  from = "/api/funds"
+  to = "/.netlify/functions/funds"
+  status = 200
+
+[[redirects]]
   from = "/api/bets"
   to = "/.netlify/functions/bets"
   status = 200

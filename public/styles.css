@@ -1010,7 +1010,8 @@ pre {
   color: #ff7474;
 }
 
-.settle-btn {
+.settle-btn,
+.fund-btn {
   width: 28px;
   height: 28px;
   margin-right: 4px;
@@ -1020,6 +1021,21 @@ pre {
   color: var(--text);
   font-weight: 900;
   cursor: pointer;
+}
+
+.fund-btn {
+  width: auto;
+  min-width: 52px;
+  padding: 0 8px;
+  background: rgba(83, 190, 126, 0.16);
+  color: #8cf0b0;
+  border-color: rgba(94, 224, 144, 0.35);
+}
+
+.fund-btn.remove {
+  background: rgba(255, 116, 116, 0.14);
+  color: #ffb2b2;
+  border-color: rgba(255, 116, 116, 0.34);
 }
 
 .bet-slip-modal-layer {
@@ -1078,6 +1094,140 @@ pre {
 .bet-slip-modal .betting-panel {
   border: 0;
   border-radius: 0;
+}
+
+.bet-entry-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 230;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(3, 5, 10, 0.28);
+}
+
+.bet-entry-modal {
+  width: min(440px, 100%);
+  border: 1px solid rgba(224, 190, 116, 0.42);
+  border-radius: 12px;
+  background: #111821;
+  box-shadow: 0 24px 58px rgba(0, 0, 0, 0.46);
+  overflow: hidden;
+}
+
+.bet-entry-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 142px;
+  gap: 12px;
+  padding: 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.bet-entry-meta span,
+.bet-entry-amount span {
+  display: block;
+  color: var(--gold-strong);
+  font-size: 0.75rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.bet-entry-meta strong {
+  display: block;
+  margin-top: 5px;
+  color: #fff;
+  font-size: 1.4rem;
+}
+
+.bet-entry-meta small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+}
+
+.bet-entry-amount input {
+  width: 100%;
+  margin-top: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #0c1118;
+  color: #fff;
+  font-weight: 900;
+  text-align: right;
+  outline: none;
+}
+
+.bet-entry-amount input:focus {
+  border-color: var(--gold-strong);
+}
+
+.bet-entry-market {
+  padding: 12px 16px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+}
+
+.bet-entry-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  padding: 14px 16px 16px;
+}
+
+.bet-entry-actions button {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 11px 12px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.bet-entry-cancel {
+  background: #202b38;
+  color: var(--text);
+}
+
+.bet-entry-submit {
+  background: linear-gradient(130deg, #e4c57f, var(--gold));
+  color: #151515;
+}
+
+.bet-entry-actions button:disabled {
+  opacity: 0.65;
+  cursor: progress;
+}
+
+.toast {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 260;
+  max-width: min(420px, calc(100vw - 36px));
+  padding: 13px 15px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #111821;
+  color: #fff;
+  box-shadow: var(--shadow);
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.toast.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.toast.success {
+  border-color: rgba(94, 224, 144, 0.42);
+  color: #9df0b9;
+}
+
+.toast.error {
+  border-color: rgba(255, 116, 116, 0.42);
+  color: #ffb2b2;
 }
 
 .ladder-modal-layer {
