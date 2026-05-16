@@ -2380,9 +2380,30 @@ function formatDateTime(value) {
 }
 
 function isUserOnline(user) {
+  if (user?.isOnline === true || user?.isOnline === "true" || user?.isOnline === "1" || user?.isOnline === 1) return true;
   const lastSeen = new Date(user?.lastSeenAt || 0).getTime();
   if (!lastSeen) return false;
   return (Date.now() - lastSeen) <= ONLINE_WINDOW_MS;
+}
+
+function betStatusValue(bet) {
+  return bet?.status === "SETTLED" ? (bet.result || "SETTLED") : (bet?.status || "-");
+}
+
+function betRateDisplay(bet) {
+  return bet?.marketType === "FANCY" ? simpleValue(betRateValue(bet)) : simpleValue(bet?.odds);
+}
+
+function betResultRunDisplay(bet) {
+  return bet?.resultRun !== undefined && bet.resultRun !== null && bet.resultRun !== "" ? simpleValue(bet.resultRun) : "-";
+}
+
+function betPnlDisplay(bet, isMaster = false) {
+  if (bet?.status !== "SETTLED") return '<span>-</span>';
+  const rawPnl = Number(bet.pnl || 0);
+  const pnl = isMaster ? -rawPnl : rawPnl;
+  const sign = pnl < 0 ? "-" : "+";
+  return `<span class="${pnl < 0 ? "loss" : "profit"}">${sign}${displayMoney(Math.abs(pnl))}</span>`;
 }
 
 function accountMetrics() {
@@ -2507,10 +2528,11 @@ function createBettingPanel() {
         <div class="ledger-table-wrap">
           <h3>User Performance</h3>
           <table class="ledger-table">
-            <thead><tr><th>User</th><th>Online</th><th>Last Login</th><th>Balance</th><th>Stake</th><th>Exposure</th><th>P/L</th><th>Bets</th><th>Funds</th></tr></thead>
+            <thead><tr><th>User</th><th>Online</th><th>Last Login</th><th>Last Seen</th><th>Balance</th><th>Stake</th><th>Exposure</th><th>P/L</th><th>Bets</th><th>Funds</th></tr></thead>
             <tbody>
               <tr>
                 <td><strong>MASTER BOOK</strong></td>
+                <td>-</td>
                 <td>-</td>
                 <td>-</td>
                 <td>${displayMoney(masterSummary.balance)}</td>
@@ -2525,6 +2547,7 @@ function createBettingPanel() {
                   <td>${simpleValue(row.username)}</td>
                   <td><span class="online-pill ${isUserOnline(row) ? "online" : "offline"}">${isUserOnline(row) ? "Online" : "Offline"}</span></td>
                   <td>${formatDateTime(row.lastLoginAt)}</td>
+                  <td>${formatDateTime(row.lastSeenAt)}</td>
                   <td>${displayMoney(row.balance)}</td>
                   <td>${displayMoney(row.totalStake)}</td>
                   <td>${displayMoney(row.exposure)}</td>
@@ -2535,7 +2558,7 @@ function createBettingPanel() {
                     <button type="button" class="fund-btn remove" data-user="${simpleValue(row.username)}" data-mode="REMOVE">Remove</button>
                   </td>
                 </tr>
-              `).join("") || '<tr><td colspan="9">No users yet.</td></tr>'}
+              `).join("") || '<tr><td colspan="10">No users yet.</td></tr>'}
             </tbody>
           </table>
         </div>
@@ -2544,7 +2567,7 @@ function createBettingPanel() {
     <div class="ledger-table-wrap">
       <h3>${isMaster ? "Recent Bets" : "My Bets"}</h3>
       <table class="ledger-table">
-        <thead><tr><th>User</th><th>Event</th><th>Market</th><th>Side</th><th>Odds</th><th>Run</th><th>Rate</th><th>Stake</th><th>Status</th><th>Result</th>${isMaster ? "<th>Settle</th>" : ""}</tr></thead>
+        <thead><tr><th>User</th><th>Event</th><th>Market</th><th>Side</th><th>Rate</th><th>Stake</th><th>Status</th><th>Result</th><th>P&L</th>${isMaster ? "<th>Settle</th>" : ""}</tr></thead>
         <tbody>
           ${myBets.map((bet) => `
             <tr>
@@ -2552,15 +2575,15 @@ function createBettingPanel() {
               <td>${simpleValue(bet.eventName)}</td>
               <td>${simpleValue(bet.marketName)}</td>
               <td>${simpleValue(bet.side)}</td>
-              <td>${bet.marketType === "FANCY" ? "-" : simpleValue(bet.odds)}</td>
-              <td>${bet.marketType === "FANCY" ? simpleValue(betRunValue(bet)) : "-"}</td>
-              <td>${bet.marketType === "FANCY" ? simpleValue(betRateValue(bet)) : "-"}</td>
+              <td>${betRateDisplay(bet)}</td>
               <td>${displayMoney(bet.stake)}</td>
-              <td>${simpleValue(bet.status)}</td>
-              <td>${bet.resultRun !== undefined && bet.resultRun !== null && bet.resultRun !== "" ? `${simpleValue(bet.result)} (${simpleValue(bet.resultRun)})` : simpleValue(bet.result)}</td>
+              <td>${simpleValue(betStatusValue(bet))}</td>
+              <td>${betResultRunDisplay(bet)}</td>
+              <td>${betPnlDisplay(bet, isMaster)}</td>
               ${isMaster ? `<td>${bet.status === "PENDING" ? `
                 ${bet.marketType === "FANCY" ? `
                   <button type="button" class="settle-run-btn" data-bet-id="${bet.id}">Run</button>
+                  <button type="button" class="settle-btn" data-bet-id="${bet.id}" data-result="VOID">V</button>
                 ` : `
                   <button type="button" class="settle-btn" data-bet-id="${bet.id}" data-result="WIN">W</button>
                   <button type="button" class="settle-btn" data-bet-id="${bet.id}" data-result="LOSE">L</button>
@@ -2568,7 +2591,7 @@ function createBettingPanel() {
                 `}
               ` : simpleValue(bet.result)}</td>` : ""}
             </tr>
-          `).join("") || `<tr><td colspan="${isMaster ? 11 : 10}">No bets placed yet.</td></tr>`}
+          `).join("") || `<tr><td colspan="${isMaster ? 10 : 9}">No bets placed yet.</td></tr>`}
         </tbody>
       </table>
     </div>
