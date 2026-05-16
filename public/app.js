@@ -10,16 +10,21 @@ const loginPass = document.querySelector("#login-pass");
 const loginError = document.querySelector("#login-error");
 const accountBar = document.querySelector("#account-bar");
 
-const REFRESH_INTERVAL_MS = 1000;
-const LIVE_SCORE_REFRESH_INTERVAL_MS = 3000;
+const REFRESH_INTERVAL_MS = 800;
+const LIVE_SCORE_REFRESH_INTERVAL_MS = 1000;
 const MASTER_LEDGER_REFRESH_INTERVAL_MS = 12000;
 const BACKGROUND_LEDGER_TIMEOUT_MS = 3000;
+const PRESENCE_HEARTBEAT_INTERVAL_MS = 20000;
+const ONLINE_WINDOW_MS = 45000;
 const ENABLE_BACKGROUND_SHEETS_SYNC = false;
 const SESSION_KEY = "fair91.auth";
 const SELECTED_EVENT_KEY = "fair91.selectedEventId";
 
 let refreshTimer = null;
 let liveScoreRefreshTimer = null;
+let presenceTimer = null;
+let oddsLoopStopped = true;
+let liveScoreLoopStopped = true;
 let ledgerRefreshTimer = null;
 let masterLedgerSyncStopped = false;
 let rowStatsSyncTimer = null;
@@ -53,6 +58,7 @@ let bettingLedger = {
 };
 let pendingStatsRows = [];
 let lastAuthError = "";
+let autoSettlingBetIds = new Set();
 let supabaseRealtime = {
   client: null,
   channel: null,
@@ -299,7 +305,42 @@ function currentSession() {
   return loadSession() || null;
 }
 
+async function updatePresence({ login = false, online = true } = {}) {
+  const session = currentSession();
+  if (!session?.username) return;
+
+  try {
+    await fetch("/api/presence", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify({ username: session.username, login, online })
+    });
+  } catch (error) {
+    console.warn("Unable to update presence", error);
+  }
+}
+
+function startPresenceHeartbeat({ login = false } = {}) {
+  stopPresenceHeartbeat();
+  updatePresence({ login, online: true }).then(() => {
+    fetchBettingLedger({ force: true, timeoutMs: BACKGROUND_LEDGER_TIMEOUT_MS }).then(renderLedgerData);
+  });
+  presenceTimer = window.setInterval(() => {
+    updatePresence({ online: true });
+  }, PRESENCE_HEARTBEAT_INTERVAL_MS);
+}
+
+function stopPresenceHeartbeat() {
+  if (presenceTimer) {
+    clearInterval(presenceTimer);
+    presenceTimer = null;
+  }
+}
+
 function logout() {
+  updatePresence({ online: false });
+  stopPresenceHeartbeat();
   stopAutoRefresh();
   stopSupabaseRealtime();
   clearSession();
@@ -551,6 +592,7 @@ async function fetchLiveScore() {
       error: "",
       fetchedAt: scorePayload.fetchedAt
     };
+    autoSettleFancyBetsFromScore();
   } catch (error) {
     liveScoreState = {
       data: null,
@@ -563,7 +605,7 @@ async function fetchLiveScore() {
 }
 
 async function fetchJsonPayload(url) {
-  const response = await fetch(url);
+  const response = await fetch(url, { cache: "no-store" });
   const text = await response.text();
   let payload = null;
 
@@ -594,6 +636,7 @@ const BALL_STATUS_MAP = {
   "^1": "Bowled",
   "^2": "Caught Out",
   "^3": "Caught and Bowled",
+  "^4": "Run Out",
   w: "Wicket",
   nb: "No Ball",
   lb: "Leg Bye",
@@ -2070,6 +2113,108 @@ function fancyLadderRows(bets, invert = false) {
   });
 }
 
+function autoSettlementScore() {
+  if (!liveScoreState.data) return null;
+  const model = readScoreModel(liveScoreState.data);
+  const runs = Number(model.score);
+  const balls = oversToBalls(model.overs);
+  if (!Number.isFinite(runs) || !Number.isFinite(balls)) return null;
+  return {
+    runs,
+    balls,
+    completedOvers: Math.floor(balls / 6)
+  };
+}
+
+function autoSettleOverNumber(marketName) {
+  const name = String(marketName || "");
+  if (/Odd\s+Run\s+Bhav/i.test(name)) return null;
+  const match = name.match(/^(\d{1,2})\s*Over\b/i);
+  if (!match) return null;
+  const over = Number(match[1]);
+  return Number.isFinite(over) && over > 0 ? over : null;
+}
+
+function autoSettleResultForFancyBet(bet, resultRuns) {
+  const target = Number(betRunValue(bet));
+  if (!Number.isFinite(target)) return "";
+  if (bet.side === "Yes") return resultRuns >= target ? "WIN" : "LOSE";
+  if (bet.side === "No") return resultRuns < target ? "WIN" : "LOSE";
+  return "";
+}
+
+async function autoSettleFancyBetsFromScore() {
+  const score = autoSettlementScore();
+  if (!score) return;
+
+  const candidates = (bettingLedger.bets || []).filter((bet) => {
+    if (bet.marketType !== "FANCY") return false;
+    if (String(bet.eventId || "") !== String(selectedEventId || "")) return false;
+    if (bet.status !== "PENDING") return false;
+    if (autoSettlingBetIds.has(bet.id)) return false;
+    const overNo = autoSettleOverNumber(bet.marketName);
+    return overNo && score.completedOvers >= overNo;
+  });
+
+  if (!candidates.length) return;
+
+  await Promise.all(candidates.map(async (bet) => {
+    const result = autoSettleResultForFancyBet(bet, score.runs);
+    if (!result) return;
+    autoSettlingBetIds.add(bet.id);
+    try {
+      await settleBet(bet.id, result, { silent: true, resultRun: score.runs });
+    } finally {
+      autoSettlingBetIds.delete(bet.id);
+    }
+  }));
+  await fetchBettingLedger({ force: true });
+  renderCurrentData();
+}
+
+async function settleFancyMarketByRun(seedBetId) {
+  if (!isMasterSession()) return;
+
+  const seedBet = (bettingLedger.bets || []).find((bet) => String(bet.id) === String(seedBetId));
+  if (!seedBet) {
+    alert("Bet not found.");
+    return;
+  }
+
+  const rawRuns = window.prompt(`Enter result runs for ${seedBet.marketName}`, "");
+  if (rawRuns === null) return;
+
+  const resultRuns = Number(rawRuns);
+  if (!Number.isFinite(resultRuns) || resultRuns < 0) {
+    alert("Please enter a valid run number.");
+    return;
+  }
+
+  const relatedBets = (bettingLedger.bets || []).filter((bet) => (
+    bet.marketType === "FANCY" &&
+    bet.status === "PENDING" &&
+    String(bet.eventId || "") === String(seedBet.eventId || "") &&
+    String(bet.marketKey || "") === String(seedBet.marketKey || "")
+  ));
+
+  if (!relatedBets.length) {
+    alert("No pending bets found for this market.");
+    return;
+  }
+
+  try {
+    await Promise.all(relatedBets.map((bet) => {
+      const result = autoSettleResultForFancyBet(bet, resultRuns);
+      return result ? settleBet(bet.id, result, { silent: true, resultRun: resultRuns }) : Promise.resolve();
+    }));
+    await fetchBettingLedger({ force: true });
+    renderCurrentData();
+    showToast(`${relatedBets.length} bet(s) settled for ${seedBet.marketName} at ${resultRuns} runs.`, "success");
+  } catch (error) {
+    showToast(error.message || "Unable to settle market.", "error");
+  }
+}
+
 function showFancyLadder(rowData) {
   const bets = currentUserFancyBets(rowData.key);
   const rows = fancyLadderRows(bets, isMasterSession());
@@ -2175,21 +2320,24 @@ async function adjustUserFunds(username, mode) {
   }
 }
 
-async function settleBet(betId, result) {
-  if (!isMasterSession()) return;
+async function settleBet(betId, result, { silent = false, resultRun = "" } = {}) {
+  if (!silent && !isMasterSession()) return;
 
   try {
     const response = await fetch("/api/bets/settle", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ betId, result })
+      body: JSON.stringify({ betId, result, resultRun })
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.detail || payload.error || "Unable to settle bet.");
-    await fetchBettingLedger();
-    renderCurrentData();
+    if (!silent) {
+      await fetchBettingLedger({ force: true });
+      renderCurrentData();
+    }
   } catch (error) {
-    alert(error.message);
+    if (!silent) alert(error.message);
+    else console.warn("Auto settlement failed", error);
   }
 }
 
@@ -2217,6 +2365,24 @@ function masterBookSummary() {
     pnl: -rows.reduce((sum, row) => sum + (Number(row.pnl) || 0), 0),
     betCount: rows.reduce((sum, row) => sum + (Number(row.betCount) || 0), 0)
   };
+}
+
+function formatDateTime(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return simpleValue(value);
+  return date.toLocaleString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function isUserOnline(user) {
+  const lastSeen = new Date(user?.lastSeenAt || 0).getTime();
+  if (!lastSeen) return false;
+  return (Date.now() - lastSeen) <= ONLINE_WINDOW_MS;
 }
 
 function accountMetrics() {
@@ -2341,10 +2507,12 @@ function createBettingPanel() {
         <div class="ledger-table-wrap">
           <h3>User Performance</h3>
           <table class="ledger-table">
-            <thead><tr><th>User</th><th>Balance</th><th>Stake</th><th>Exposure</th><th>P/L</th><th>Bets</th><th>Funds</th></tr></thead>
+            <thead><tr><th>User</th><th>Online</th><th>Last Login</th><th>Balance</th><th>Stake</th><th>Exposure</th><th>P/L</th><th>Bets</th><th>Funds</th></tr></thead>
             <tbody>
               <tr>
                 <td><strong>MASTER BOOK</strong></td>
+                <td>-</td>
+                <td>-</td>
                 <td>${displayMoney(masterSummary.balance)}</td>
                 <td>${displayMoney(masterSummary.totalStake)}</td>
                 <td>${displayMoney(masterSummary.exposure)}</td>
@@ -2355,6 +2523,8 @@ function createBettingPanel() {
               ${performanceRows.map((row) => `
                 <tr>
                   <td>${simpleValue(row.username)}</td>
+                  <td><span class="online-pill ${isUserOnline(row) ? "online" : "offline"}">${isUserOnline(row) ? "Online" : "Offline"}</span></td>
+                  <td>${formatDateTime(row.lastLoginAt)}</td>
                   <td>${displayMoney(row.balance)}</td>
                   <td>${displayMoney(row.totalStake)}</td>
                   <td>${displayMoney(row.exposure)}</td>
@@ -2365,7 +2535,7 @@ function createBettingPanel() {
                     <button type="button" class="fund-btn remove" data-user="${simpleValue(row.username)}" data-mode="REMOVE">Remove</button>
                   </td>
                 </tr>
-              `).join("") || '<tr><td colspan="7">No users yet.</td></tr>'}
+              `).join("") || '<tr><td colspan="9">No users yet.</td></tr>'}
             </tbody>
           </table>
         </div>
@@ -2374,7 +2544,7 @@ function createBettingPanel() {
     <div class="ledger-table-wrap">
       <h3>${isMaster ? "Recent Bets" : "My Bets"}</h3>
       <table class="ledger-table">
-        <thead><tr><th>User</th><th>Event</th><th>Market</th><th>Side</th><th>Odds</th><th>Run</th><th>Rate</th><th>Stake</th><th>Status</th>${isMaster ? "<th>Settle</th>" : ""}</tr></thead>
+        <thead><tr><th>User</th><th>Event</th><th>Market</th><th>Side</th><th>Odds</th><th>Run</th><th>Rate</th><th>Stake</th><th>Status</th><th>Result</th>${isMaster ? "<th>Settle</th>" : ""}</tr></thead>
         <tbody>
           ${myBets.map((bet) => `
             <tr>
@@ -2387,13 +2557,18 @@ function createBettingPanel() {
               <td>${bet.marketType === "FANCY" ? simpleValue(betRateValue(bet)) : "-"}</td>
               <td>${displayMoney(bet.stake)}</td>
               <td>${simpleValue(bet.status)}</td>
+              <td>${bet.resultRun !== undefined && bet.resultRun !== null && bet.resultRun !== "" ? `${simpleValue(bet.result)} (${simpleValue(bet.resultRun)})` : simpleValue(bet.result)}</td>
               ${isMaster ? `<td>${bet.status === "PENDING" ? `
-                <button type="button" class="settle-btn" data-bet-id="${bet.id}" data-result="WIN">W</button>
-                <button type="button" class="settle-btn" data-bet-id="${bet.id}" data-result="LOSE">L</button>
-                <button type="button" class="settle-btn" data-bet-id="${bet.id}" data-result="VOID">V</button>
+                ${bet.marketType === "FANCY" ? `
+                  <button type="button" class="settle-run-btn" data-bet-id="${bet.id}">Run</button>
+                ` : `
+                  <button type="button" class="settle-btn" data-bet-id="${bet.id}" data-result="WIN">W</button>
+                  <button type="button" class="settle-btn" data-bet-id="${bet.id}" data-result="LOSE">L</button>
+                  <button type="button" class="settle-btn" data-bet-id="${bet.id}" data-result="VOID">V</button>
+                `}
               ` : simpleValue(bet.result)}</td>` : ""}
             </tr>
-          `).join("") || `<tr><td colspan="${isMaster ? 10 : 9}">No bets placed yet.</td></tr>`}
+          `).join("") || `<tr><td colspan="${isMaster ? 11 : 10}">No bets placed yet.</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -2405,6 +2580,9 @@ function createBettingPanel() {
   });
   section.querySelectorAll(".settle-btn").forEach((button) => {
     button.addEventListener("click", () => settleBet(button.dataset.betId, button.dataset.result));
+  });
+  section.querySelectorAll(".settle-run-btn").forEach((button) => {
+    button.addEventListener("click", () => settleFancyMarketByRun(button.dataset.betId));
   });
 
   return section;
@@ -2516,7 +2694,7 @@ function renderError(message, detail = "") {
 
 async function fetchSelectedEvent({ manual = false } = {}) {
   if (!selectedEventId) return;
-  if (activeOddsRequests >= 8) return;
+  if (activeOddsRequests >= 1) return;
 
   isFetching = true;
   activeOddsRequests += 1;
@@ -2545,17 +2723,13 @@ async function fetchSelectedEvent({ manual = false } = {}) {
 function startAutoRefresh() {
   stopAutoRefresh();
   if (!selectedEventId) return;
-  fetchSelectedEvent({ manual: true });
-  if (hasLiveScoreConfig()) fetchLiveScore().then(renderCurrentData);
+  oddsLoopStopped = false;
+  liveScoreLoopStopped = false;
+  scheduleOddsRefresh(0, true);
+  if (hasLiveScoreConfig()) scheduleLiveScoreRefresh(0);
   else liveScoreState = { data: null, error: "", fetchedAt: "" };
   if (ENABLE_BACKGROUND_SHEETS_SYNC) fetchBettingLedger().then(renderCurrentData);
   if (ENABLE_BACKGROUND_SHEETS_SYNC) flushSeenRangeSync();
-  refreshTimer = window.setInterval(() => fetchSelectedEvent(), REFRESH_INTERVAL_MS);
-  if (hasLiveScoreConfig()) {
-    liveScoreRefreshTimer = window.setInterval(() => {
-      fetchLiveScore().then(renderCurrentData);
-    }, LIVE_SCORE_REFRESH_INTERVAL_MS);
-  }
   if (supabaseRealtime.enabled) startSupabaseRealtime();
   if (isMasterSession()) startMasterLedgerSync();
   if (ENABLE_BACKGROUND_SHEETS_SYNC) {
@@ -2566,13 +2740,34 @@ function startAutoRefresh() {
   }
 }
 
+function scheduleOddsRefresh(delay = REFRESH_INTERVAL_MS, manual = false) {
+  if (oddsLoopStopped) return;
+  refreshTimer = window.setTimeout(async () => {
+    refreshTimer = null;
+    await fetchSelectedEvent({ manual });
+    scheduleOddsRefresh(REFRESH_INTERVAL_MS);
+  }, delay);
+}
+
+function scheduleLiveScoreRefresh(delay = LIVE_SCORE_REFRESH_INTERVAL_MS) {
+  if (liveScoreLoopStopped || !hasLiveScoreConfig()) return;
+  liveScoreRefreshTimer = window.setTimeout(async () => {
+    liveScoreRefreshTimer = null;
+    await fetchLiveScore();
+    renderCurrentData();
+    scheduleLiveScoreRefresh(LIVE_SCORE_REFRESH_INTERVAL_MS);
+  }, delay);
+}
+
 function stopAutoRefresh() {
+  oddsLoopStopped = true;
+  liveScoreLoopStopped = true;
   if (refreshTimer) {
-    clearInterval(refreshTimer);
+    clearTimeout(refreshTimer);
     refreshTimer = null;
   }
   if (liveScoreRefreshTimer) {
-    clearInterval(liveScoreRefreshTimer);
+    clearTimeout(liveScoreRefreshTimer);
     liveScoreRefreshTimer = null;
   }
   if (ledgerRefreshTimer) {
@@ -2631,6 +2826,7 @@ async function initialize() {
     }
 
     setLoginVisible(false);
+    startPresenceHeartbeat();
     selectedEventId = localStorage.getItem(SELECTED_EVENT_KEY) || eventRows[0].id;
     renderTabs();
     renderAccountBar();
@@ -2663,6 +2859,7 @@ loginForm.addEventListener("submit", async (event) => {
 
   setLoginVisible(false);
   renderAccountBar();
+  startPresenceHeartbeat({ login: true });
 
   selectedEventId = localStorage.getItem(SELECTED_EVENT_KEY) || eventRows[0].id;
   renderTabs();

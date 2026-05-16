@@ -7,8 +7,8 @@ const SHEETS = {
 
 const HEADERS = {
   login: ["username", "password", "name", "role"],
-  users: ["username", "password", "name", "role", "balance", "createdAt"],
-  bets: ["id", "username", "eventId", "eventName", "marketKey", "marketName", "marketType", "side", "odds", "run", "target", "rate", "stake", "liability", "estimatedProfit", "status", "result", "pnl", "placedAt", "settledAt", "statusAtSelection", "verifiedAt"],
+  users: ["username", "password", "name", "role", "balance", "createdAt", "lastLoginAt", "lastSeenAt", "isOnline"],
+  bets: ["id", "username", "eventId", "eventName", "marketKey", "marketName", "marketType", "side", "odds", "run", "target", "rate", "stake", "liability", "estimatedProfit", "status", "result", "resultRun", "pnl", "placedAt", "settledAt", "statusAtSelection", "verifiedAt"],
   rowStats: ["eventId", "rowKey", "min", "max", "updatedAt"]
 };
 
@@ -25,6 +25,7 @@ function doPost(e) {
     if (action === "auth") return jsonResponse(authUser(payload));
     if (action === "createUser") return jsonResponse(createUser(payload));
     if (action === "adjustFunds") return jsonResponse(adjustFunds(payload));
+    if (action === "presence") return jsonResponse(updatePresence(payload));
     if (action === "placeBet") return jsonResponse(placeBet(payload));
     if (action === "settleBet") return jsonResponse(settleBet(payload));
 
@@ -171,12 +172,15 @@ function publicLedger() {
       totalStake: userBets.reduce((sum, bet) => sum + toNumber(bet.stake, 0), 0),
       exposure: pending.reduce((sum, bet) => sum + toNumber(bet.stake, 0), 0),
       pnl: settled.reduce((sum, bet) => sum + toNumber(bet.pnl, 0), 0),
-      betCount: userBets.length
+      betCount: userBets.length,
+      lastLoginAt: user.lastLoginAt,
+      lastSeenAt: user.lastSeenAt,
+      isOnline: user.isOnline
     };
   });
 
   return {
-    users: users.map((user) => ({ username: user.username, name: user.name, role: user.role, balance: user.balance, createdAt: user.createdAt })),
+    users: users.map((user) => ({ username: user.username, name: user.name, role: user.role, balance: user.balance, createdAt: user.createdAt, lastLoginAt: user.lastLoginAt, lastSeenAt: user.lastSeenAt, isOnline: user.isOnline })),
     bets,
     summary
   };
@@ -213,6 +217,28 @@ function createUser(payload) {
     appendRecord(SHEETS.users, HEADERS.users, user);
     appendRecord(SHEETS.login, HEADERS.login, { username, password, name, role: "user" });
     return { user: { username, name, role: "user", balance } };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function updatePresence(payload) {
+  const lock = LockService.getDocumentLock();
+  lock.waitLock(10000);
+  try {
+    const username = String(payload.username || "").trim();
+    if (!username) return { statusCode: 400, error: "Username is required." };
+
+    const users = readRows(SHEETS.users, HEADERS.users);
+    const user = users.find((row) => String(row.username).toLowerCase() === username.toLowerCase());
+    if (!user) return { statusCode: 404, error: "User not found." };
+
+    const now = new Date().toISOString();
+    user.lastSeenAt = now;
+    user.isOnline = payload.online !== false ? "1" : "0";
+    if (payload.login) user.lastLoginAt = now;
+    writeRecord(SHEETS.users, HEADERS.users, user._row, user);
+    return { user: { username: user.username, lastLoginAt: user.lastLoginAt, lastSeenAt: user.lastSeenAt, isOnline: user.isOnline } };
   } finally {
     lock.releaseLock();
   }
@@ -290,6 +316,7 @@ function placeBet(payload) {
       estimatedProfit,
       status: "PENDING",
       result: "",
+      resultRun: "",
       pnl: 0,
       placedAt: new Date().toISOString(),
       settledAt: "",
@@ -335,6 +362,7 @@ function settleBet(payload) {
 
     bet.status = "SETTLED";
     bet.result = result;
+    bet.resultRun = payload.resultRun !== undefined && payload.resultRun !== null ? payload.resultRun : "";
     bet.settledAt = new Date().toISOString();
     writeRecord(SHEETS.users, HEADERS.users, user._row, user);
     writeRecord(SHEETS.bets, HEADERS.bets, bet._row, bet);

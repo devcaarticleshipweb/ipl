@@ -1025,7 +1025,29 @@ pre {
   color: #ff7474;
 }
 
+.online-pill {
+  display: inline-flex;
+  align-items: center;
+  min-width: 58px;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.online-pill.online {
+  background: rgba(94, 224, 144, 0.14);
+  color: #78eca6;
+}
+
+.online-pill.offline {
+  background: rgba(158, 166, 185, 0.12);
+  color: var(--muted);
+}
+
 .settle-btn,
+.settle-run-btn,
 .fund-btn {
   width: 28px;
   height: 28px;
@@ -1036,6 +1058,13 @@ pre {
   color: var(--text);
   font-weight: 900;
   cursor: pointer;
+}
+
+.settle-run-btn {
+  width: auto;
+  min-width: 48px;
+  padding: 0 8px;
+  color: #f5d271;
 }
 
 .fund-btn {

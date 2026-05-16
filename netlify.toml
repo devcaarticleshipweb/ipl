@@ -43,6 +43,11 @@
   status = 200
 
 [[redirects]]
+  from = "/api/presence"
+  to = "/.netlify/functions/presence"
+  status = 200
+
+[[redirects]]
   from = "/api/bets"
   to = "/.netlify/functions/bets"
   status = 200

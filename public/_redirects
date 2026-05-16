@@ -6,6 +6,7 @@
 /api/betting-auth /.netlify/functions/betting-auth 200
 /api/betting-users /.netlify/functions/betting-users 200
 /api/funds /.netlify/functions/funds 200
+/api/presence /.netlify/functions/presence 200
 /api/bets /.netlify/functions/bets 200
 /api/bets/settle /.netlify/functions/bet-settle 200
 /api/live-score /.netlify/functions/live-score 200

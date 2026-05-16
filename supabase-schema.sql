@@ -6,6 +6,9 @@ create table if not exists public.users (
   name text,
   role text not null default 'user',
   balance numeric not null default 0,
+  last_login_at timestamptz,
+  last_seen_at timestamptz,
+  is_online boolean not null default false,
   created_at timestamptz not null default now()
 );
 
@@ -27,6 +30,7 @@ create table if not exists public.bets (
   estimated_profit numeric not null default 0,
   status text not null default 'PENDING',
   result text,
+  result_run numeric,
   pnl numeric not null default 0,
   placed_at timestamptz not null default now(),
   settled_at timestamptz,
@@ -36,6 +40,14 @@ create table if not exists public.bets (
 
 alter table public.users replica identity full;
 alter table public.bets replica identity full;
+
+alter table public.bets
+add column if not exists result_run numeric;
+
+alter table public.users
+add column if not exists last_login_at timestamptz,
+add column if not exists last_seen_at timestamptz,
+add column if not exists is_online boolean not null default false;
 
 do $$
 begin

@@ -119,7 +119,7 @@ async function callSheetsApi(action, payload = {}) {
 async function handleSheetsBackedApi(req, res, action) {
   try {
     const payload = req.method === "GET" ? {} : await readJsonBody(req);
-    if (isSupabaseConfigured() && ["getLedger", "auth", "createUser", "placeBet", "settleBet"].includes(action)) {
+    if (isSupabaseConfigured() && ["getLedger", "auth", "createUser", "adjustFunds", "presence", "placeBet", "settleBet"].includes(action)) {
       const result = await runSupabaseAction(action, payload);
       sendJson(res, Number(result.statusCode || 200), result);
       return;
@@ -325,6 +325,7 @@ async function handleBets(req, res) {
       estimatedProfit,
       status: "PENDING",
       result: "",
+      resultRun: "",
       pnl: 0,
       placedAt: new Date().toISOString()
     };
@@ -342,6 +343,7 @@ async function handleBetSettle(req, res) {
   try {
     const body = await readJsonBody(req);
     const result = String(body.result || "").toUpperCase();
+    const resultRun = numericValue(body.resultRun);
     const ledger = loadBettingLedger();
     const bet = ledger.bets.find((row) => row.id === body.betId);
     if (!bet) return sendJson(res, 404, { error: "Bet not found." });
@@ -365,6 +367,7 @@ async function handleBetSettle(req, res) {
 
     bet.status = "SETTLED";
     bet.result = result;
+    bet.resultRun = resultRun ?? "";
     bet.settledAt = new Date().toISOString();
     saveBettingLedger(ledger);
     sendJson(res, 200, { bet, ledger: publicLedger(ledger) });
@@ -640,6 +643,11 @@ const server = http.createServer((req, res) => {
 
   if (requestUrl.pathname === "/api/betting-users") {
     handleSheetsBackedApi(req, res, "createUser");
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/presence") {
+    handleSheetsBackedApi(req, res, "presence");
     return;
   }
 

@@ -55,7 +55,10 @@ function appUser(row) {
     name: row.name,
     role: row.role,
     balance: row.balance,
-    createdAt: row.created_at
+    createdAt: row.created_at,
+    lastLoginAt: row.last_login_at,
+    lastSeenAt: row.last_seen_at,
+    isOnline: row.is_online
   };
 }
 
@@ -78,6 +81,7 @@ function appBet(row) {
     estimatedProfit: row.estimated_profit,
     status: row.status,
     result: row.result,
+    resultRun: row.result_run,
     pnl: row.pnl,
     placedAt: row.placed_at,
     settledAt: row.settled_at,
@@ -100,7 +104,10 @@ function publicLedger(users, bets) {
       totalStake: userBets.reduce((sum, bet) => sum + toNumber(bet.stake, 0), 0),
       exposure: pending.reduce((sum, bet) => sum + toNumber(bet.liability || bet.stake, 0), 0),
       pnl: settled.reduce((sum, bet) => sum + toNumber(bet.pnl, 0), 0),
-      betCount: userBets.length
+      betCount: userBets.length,
+      lastLoginAt: user.lastLoginAt,
+      lastSeenAt: user.lastSeenAt,
+      isOnline: user.isOnline
     };
   });
 
@@ -166,6 +173,24 @@ async function adjustFunds(payload) {
   return { user: appUser(updated[0]), ledger: await getLedger(), backend: "supabase" };
 }
 
+async function updatePresence(payload) {
+  const username = String(payload.username || "").trim();
+  if (!username) return { statusCode: 400, error: "Username is required." };
+
+  const now = new Date().toISOString();
+  const patch = {
+    last_seen_at: now,
+    is_online: payload.online !== false
+  };
+  if (payload.login) patch.last_login_at = now;
+
+  const updated = await supabaseFetch(`/rest/v1/users?username=eq.${encodeURIComponent(username)}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch)
+  });
+  return { user: updated?.[0] ? appUser(updated[0]) : null, backend: "supabase" };
+}
+
 async function placeBet(payload) {
   const username = String(payload.username || "").trim();
   const stake = toNumber(payload.stake, null);
@@ -222,6 +247,7 @@ async function placeBet(payload) {
 async function settleBet(payload) {
   const betId = String(payload.betId || "");
   const result = String(payload.result || "").toUpperCase();
+  const resultRun = toNumber(payload.resultRun, null);
   const bets = await supabaseFetch(`/rest/v1/bets?select=*&id=eq.${encodeURIComponent(betId)}&limit=1`);
   const bet = bets?.[0];
   if (!bet) return { statusCode: 404, error: "Bet not found." };
@@ -252,7 +278,7 @@ async function settleBet(payload) {
   });
   const updated = await supabaseFetch(`/rest/v1/bets?id=eq.${encodeURIComponent(betId)}`, {
     method: "PATCH",
-    body: JSON.stringify({ status: "SETTLED", result, pnl, settled_at: new Date().toISOString() })
+    body: JSON.stringify({ status: "SETTLED", result, result_run: resultRun, pnl, settled_at: new Date().toISOString() })
   });
   return { bet: appBet(updated[0]), ledger: await getLedger(), backend: "supabase" };
 }
@@ -262,6 +288,7 @@ async function runSupabaseAction(action, payload = {}) {
   if (action === "auth") return auth(payload);
   if (action === "createUser") return createUser(payload);
   if (action === "adjustFunds") return adjustFunds(payload);
+  if (action === "presence") return updatePresence(payload);
   if (action === "placeBet") return placeBet(payload);
   if (action === "settleBet") return settleBet(payload);
   return { statusCode: 404, error: "Unknown Supabase action." };

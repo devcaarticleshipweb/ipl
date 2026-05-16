@@ -591,6 +591,7 @@ function Handle-BetsApi {
       estimatedProfit = $EstimatedProfit
       status = "PENDING"
       result = ""
+      resultRun = ""
       pnl = 0
       placedAt = (Get-Date).ToUniversalTime().ToString("o")
     }
@@ -618,6 +619,7 @@ function Handle-BetSettleApi {
     $Body = Read-JsonBody -Request $Request
     $BetId = [string]$Body.betId
     $Result = ([string]$Body.result).ToUpperInvariant()
+    $ResultRun = Get-NumericValue -Value $Body.resultRun
     $Ledger = Get-BettingLedger
     $Bets = @($Ledger["bets"])
     $Bet = @($Bets | Where-Object { [string]$_.id -eq $BetId } | Select-Object -First 1)
@@ -656,6 +658,7 @@ function Handle-BetSettleApi {
 
     $Bet.status = "SETTLED"
     $Bet.result = $Result
+    $Bet.resultRun = if ($null -eq $ResultRun) { "" } else { $ResultRun }
     $Bet.settledAt = (Get-Date).ToUniversalTime().ToString("o")
     Save-BettingLedger -Ledger $Ledger
     Write-Json -Response $Response -StatusCode 200 -Payload @{ bet = $Bet; ledger = (Get-PublicLedger -Ledger $Ledger) }
