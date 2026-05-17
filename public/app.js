@@ -59,6 +59,7 @@ let bettingLedger = {
 let pendingStatsRows = [];
 let lastAuthError = "";
 let autoSettlingBetIds = new Set();
+let batterDisplayOrderByEvent = new Map();
 let supabaseRealtime = {
   client: null,
   channel: null,
@@ -106,6 +107,11 @@ function normalizeStatus(status, fallback = "") {
 
 function isActiveStatus(status) {
   return normalizeStatus(status) === "ACTIVE";
+}
+
+function isPositivePrice(value) {
+  const number = toNum(value);
+  return number !== null && number > 0;
 }
 
 function setLoginVisible(visible) {
@@ -364,6 +370,16 @@ function displayMoney(value) {
   return number.toLocaleString("en-IN", { maximumFractionDigits: 2 });
 }
 
+function amountDigits(value) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function formatStakeInput(value) {
+  const digits = amountDigits(value);
+  if (!digits) return "";
+  return Number(digits).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+}
+
 async function fetchBettingLedger({ force = false, timeoutMs = 0 } = {}) {
   if (isLedgerFetching && ledgerFetchPromise && !force) return ledgerFetchPromise;
   isLedgerFetching = true;
@@ -414,6 +430,7 @@ function renderTabs() {
       selectedEventName = event.name;
       localStorage.setItem(SELECTED_EVENT_KEY, selectedEventId);
       lastRowsByKey = new Map();
+      batterDisplayOrderByEvent.delete(selectedEventId);
       hasRenderedData = false;
       renderTabs();
       startAutoRefresh();
@@ -466,13 +483,32 @@ function buildFancyRows(root) {
     .map(({ selectionId, market }) => ({
       key: `FANCY:${market.id || selectionId}`,
       marketType: "FANCY",
-      label: market.name,
+      label: normalizeFancyMarketLabel(market.name),
       backPrice: market.b1,
       layPrice: market.l1,
       backSize: market.bs1,
       laySize: market.ls1,
       status: normalizeStatus(market.status1)
     }));
+}
+
+function lambiTwentyOverTeam(marketName) {
+  const name = String(marketName || "").replace(/\s+/g, " ").trim();
+  if (!/^Lambi\b/i.test(name)) return "";
+
+  let team = name
+    .replace(/^Lambi\s*/i, "")
+    .replace(/\s+Run\s+Bhav(?:\s+\d+)?$/i, "")
+    .replace(/\s+Run$/i, "")
+    .trim();
+
+  if (!team || /^Odd\s+Run\s+Bhav\b/i.test(team)) return "";
+  return team;
+}
+
+function normalizeFancyMarketLabel(marketName) {
+  const lambiTeam = lambiTwentyOverTeam(marketName);
+  return lambiTeam ? `20 Over ${lambiTeam}` : marketName;
 }
 
 function buildOddsRows(value) {
@@ -630,8 +666,11 @@ const BALL_STATUS_MAP = {
   o: "Over",
   wd: "Wide",
   ba: "Ball in Air",
+  e: "Players Entering",
   f: "Fast Bowler",
+  no: "Not Out",
   s: "Spin Bowler",
+  u: "Review Taken",
   ruka: "Bowler Stopped",
   "^1": "Bowled",
   "^2": "Caught Out",
@@ -1337,8 +1376,30 @@ function batterNameMarkup(name) {
   return `${simpleValue(cleanName)}${isStriker ? ' <span class="bat-icon" title="On strike">🏏</span>' : ""}`;
 }
 
+function batterOrderKey(name) {
+  return normalizeTeamKey(String(name || "").replace(/\*/g, "").trim());
+}
+
+function stableBatterRows(rows) {
+  const eventKey = selectedEventId || "current";
+  const stored = batterDisplayOrderByEvent.get(eventKey) || [];
+  const activeKeys = rows.map((row) => batterOrderKey(row.name)).filter(Boolean);
+  const nextOrder = stored.filter((key) => activeKeys.includes(key));
+
+  activeKeys.forEach((key) => {
+    if (!nextOrder.includes(key)) nextOrder.push(key);
+  });
+  batterDisplayOrderByEvent.set(eventKey, nextOrder);
+
+  return [...rows].sort((a, b) => {
+    const indexA = nextOrder.indexOf(batterOrderKey(a.name));
+    const indexB = nextOrder.indexOf(batterOrderKey(b.name));
+    return (indexA === -1 ? 99 : indexA) - (indexB === -1 ? 99 : indexB);
+  });
+}
+
 function createBatterGrid(model) {
-  const rows = [
+  const rows = stableBatterRows([
     {
       name: model.striker,
       runs: model.strikerRuns,
@@ -1355,7 +1416,7 @@ function createBatterGrid(model) {
       sixes: model.nonStrikerSixes,
       strikeRate: model.nonStrikerStrikeRate
     }
-  ].filter((row) => row.name || row.runs || row.balls);
+  ].filter((row) => row.name || row.runs || row.balls));
 
   if (rows.length === 0) {
     return '<div class="scorecard-grid batter-grid scorecard-grid-empty">Batsman data unavailable</div>';
@@ -1758,6 +1819,60 @@ function betRateValue(bet) {
   return bet?.rate || "";
 }
 
+function betEntryOutcomeRows(rowData, side, odds, rate, stake) {
+  const stakeValue = Number(stake);
+  if (!Number.isFinite(stakeValue) || stakeValue <= 0) {
+    return [
+      { label: "Enter amount", value: "Preview will appear here", type: "neutral" }
+    ];
+  }
+
+  if (isFancyBet(rowData)) {
+    const run = Number(odds);
+    const profit = fancyProfit(stakeValue, rate, side);
+    const liability = fancyLiability(stakeValue, rate, side);
+    if (side === "Yes") {
+      return [
+        { label: `Result ${run} or more`, value: `+${displayMoney(profit)}`, type: "profit" },
+        { label: `Result below ${run}`, value: `-${displayMoney(liability)}`, type: "loss" }
+      ];
+    }
+    return [
+      { label: `Result below ${run}`, value: `+${displayMoney(profit)}`, type: "profit" },
+      { label: `Result ${run} or more`, value: `-${displayMoney(liability)}`, type: "loss" }
+    ];
+  }
+
+  const profit = side === "Lay" ? stakeValue : bookmakerRateAmount(stakeValue, odds);
+  const liability = side === "Lay" ? bookmakerRateAmount(stakeValue, odds) : stakeValue;
+  if (side === "Back") {
+    return [
+      { label: `${simpleValue(rowData.label)} wins`, value: `+${displayMoney(profit)}`, type: "profit" },
+      { label: `${simpleValue(rowData.label)} loses`, value: `-${displayMoney(liability)}`, type: "loss" }
+    ];
+  }
+  return [
+    { label: `${simpleValue(rowData.label)} loses`, value: `+${displayMoney(profit)}`, type: "profit" },
+    { label: `${simpleValue(rowData.label)} wins`, value: `-${displayMoney(liability)}`, type: "loss" }
+  ];
+}
+
+function renderBetEntryOutcome(container, rowData, side, odds, rate, stake) {
+  container.replaceChildren();
+  betEntryOutcomeRows(rowData, side, odds, rate, stake).forEach((row) => {
+    const item = document.createElement("div");
+    item.className = `bet-entry-outcome-row ${row.type}`;
+
+    const label = document.createElement("span");
+    label.textContent = row.label;
+    const value = document.createElement("strong");
+    value.textContent = row.value;
+
+    item.append(label, value);
+    container.append(item);
+  });
+}
+
 function showToast(message, type = "info") {
   const existing = document.querySelector(".toast");
   if (existing) existing.remove();
@@ -1796,6 +1911,7 @@ function showBetEntryModal(rowData, side, odds, rate = "") {
       </label>
     </div>
     <div class="bet-entry-market">${simpleValue(rowData.label)}</div>
+    <div class="bet-entry-outcome" aria-live="polite"></div>
     <div class="bet-entry-actions">
       <button type="button" class="bet-entry-cancel">Cancel</button>
       <button type="submit" class="bet-entry-submit">Place Bet</button>
@@ -1805,14 +1921,18 @@ function showBetEntryModal(rowData, side, odds, rate = "") {
   const input = modal.querySelector("input");
   const cancel = modal.querySelector(".bet-entry-cancel");
   const submit = modal.querySelector(".bet-entry-submit");
+  const outcome = modal.querySelector(".bet-entry-outcome");
+
+  renderBetEntryOutcome(outcome, rowData, side, odds, rate, amountDigits(input.value));
 
   input.addEventListener("input", () => {
-    input.value = input.value.replace(/\D/g, "");
+    input.value = formatStakeInput(input.value);
+    renderBetEntryOutcome(outcome, rowData, side, odds, rate, amountDigits(input.value));
   });
   cancel.addEventListener("click", () => layer.remove());
   modal.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const stake = Number(input.value);
+    const stake = Number(amountDigits(input.value));
     if (!Number.isFinite(stake) || stake <= 0) {
       showToast("Please enter a valid amount.", "error");
       input.focus();
@@ -1866,6 +1986,9 @@ async function executePlaceBet(rowData, side, odds, rate, stake) {
 
     const latestOdds = side === "Back" || side === "Yes" ? latestRow.backPrice : latestRow.layPrice;
     const latestRate = fancyRateForSide(latestRow, side);
+    if (!isPositivePrice(latestOdds)) {
+      throw new Error("Bet rejected. Odds are now 0.");
+    }
     if (String(latestOdds) !== String(odds)) {
       throw new Error(`Bet rejected. Odds changed from ${odds} to ${latestOdds}.`);
     }
@@ -1921,9 +2044,13 @@ function createPriceBox(kind, key, price, size, rowData, sideLabel) {
   box.role = "button";
   box.tabIndex = 0;
   addPulseIfChanged(box, key, kind === "back" ? "back" : "lay", price);
+  const canBet = rowData && sideLabel && isActiveStatus(rowData.status) && isPositivePrice(price);
   if (rowData && !isActiveStatus(rowData.status)) {
     box.classList.add("disabled");
     box.title = `Betting disabled: ${simpleValue(rowData.status)}`;
+  } else if (rowData && !isPositivePrice(price)) {
+    box.classList.add("disabled");
+    box.title = "Betting disabled: odds are 0";
   }
 
   const priceNode = document.createElement("strong");
@@ -1938,7 +2065,7 @@ function createPriceBox(kind, key, price, size, rowData, sideLabel) {
     box.append(sizeNode);
   }
 
-  if (rowData && sideLabel && isActiveStatus(rowData.status)) {
+  if (canBet) {
     box.title = isFancyBet(rowData) ? `Place ${sideLabel} bet at ${price}/${size}` : `Place ${sideLabel} bet`;
     box.addEventListener("click", () => placeBet(rowData, sideLabel, price, size));
     box.addEventListener("keydown", (event) => {
@@ -2024,19 +2151,21 @@ function createMarketSection(title, columns, rows, fancyMode = false) {
     const minMax = document.createElement("span");
     minMax.className = "seen-range";
     minMax.textContent = `Min ${simpleValue(range.min)} | Max ${simpleValue(range.max)}`;
-    left.append(nameLine, minMax);
-    if (fancyMode && hasFancyLadder(rowData.key)) {
+    if (fancyMode && hasFancyLadder(rowData)) {
       const ladder = document.createElement("button");
       ladder.type = "button";
       ladder.className = "ladder-btn";
       ladder.title = "Show fancy ladder";
       ladder.textContent = "▦";
+      ladder.setAttribute("aria-label", "Show fancy ladder");
+      ladder.innerHTML = '<span class="ladder-icon" aria-hidden="true"></span>';
       ladder.addEventListener("click", (event) => {
         event.stopPropagation();
         showFancyLadder(rowData);
       });
-      left.append(ladder);
+      nameLine.append(ladder);
     }
+    left.append(nameLine, minMax);
     nameCell.append(left);
     if (!isActiveStatus(rowData.status)) {
       nameCell.append(createStatusNode(simpleValue(rowData.status)));
@@ -2063,20 +2192,32 @@ function createMarketSection(title, columns, rows, fancyMode = false) {
   return section;
 }
 
-function currentUserFancyBets(marketKey) {
+function fancySettlementGroupKey(value) {
+  const marketName = typeof value === "object" ? value.marketName || value.label : "";
+  const marketKey = typeof value === "object" ? value.marketKey || value.key : value;
+  const lambiTeam = lambiTwentyOverTeam(marketName);
+  if (lambiTeam) return `OVER:20:${normalizeTeamKey(lambiTeam)}`;
+  const normalizedName = String(normalizeFancyMarketLabel(marketName) || "").replace(/\s+/g, " ").trim();
+  const overMatch = normalizedName.match(/^(\d{1,2})\s*Over\s+(.+)$/i);
+  if (overMatch) return `OVER:${Number(overMatch[1])}:${normalizeTeamKey(overMatch[2])}`;
+  return `KEY:${marketKey}`;
+}
+
+function currentUserFancyBets(rowDataOrMarketKey) {
   const session = currentSession();
   if (!session) return [];
   const isMaster = isMasterSession();
+  const selectedGroupKey = fancySettlementGroupKey(rowDataOrMarketKey);
   return (bettingLedger.bets || []).filter((bet) => {
     if (bet.marketType !== "FANCY") return false;
-    if (bet.marketKey !== marketKey) return false;
+    if (fancySettlementGroupKey(bet) !== selectedGroupKey) return false;
     if (bet.status && bet.status !== "PENDING") return false;
     return isMaster || String(bet.username).toLowerCase() === String(session.username).toLowerCase();
   });
 }
 
-function hasFancyLadder(marketKey) {
-  return currentUserFancyBets(marketKey).length > 0;
+function hasFancyLadder(rowDataOrMarketKey) {
+  return currentUserFancyBets(rowDataOrMarketKey).length > 0;
 }
 
 function fancyBetPnlAtResult(bet, result) {
@@ -2113,6 +2254,35 @@ function fancyLadderRows(bets, invert = false) {
   });
 }
 
+function overBallRunMap(model) {
+  const map = new Map();
+  const addOver = (over) => {
+    if (!over) return;
+    over.balls.forEach((ball, index) => {
+      if (!ball) return;
+      map.set(`${over.number}.${index + 1}`, ballRunValue(ball));
+    });
+  };
+
+  [
+    parsePastOver(model.overHistory?.last3),
+    parsePastOver(model.overHistory?.last2),
+    parsePastOver(model.overHistory?.last1)
+  ].forEach(addOver);
+
+  const lastOverNo = parsePastOver(model.overHistory?.last1)?.number;
+  const currentNumber = Number.isFinite(lastOverNo) ? lastOverNo + 1 : Number(model.overs?.split?.(".")?.[0]) + 1;
+  const currentOver = parseCurrentOver(model.overHistory?.current, "");
+  if (currentOver && Number.isFinite(currentNumber)) {
+    currentOver.balls.forEach((ball, index) => {
+      if (!ball) return;
+      map.set(`${currentNumber}.${index + 1}`, ballRunValue(ball));
+    });
+  }
+
+  return map;
+}
+
 function autoSettlementScore() {
   if (!liveScoreState.data) return null;
   const model = readScoreModel(liveScoreState.data);
@@ -2122,17 +2292,28 @@ function autoSettlementScore() {
   return {
     runs,
     balls,
-    completedOvers: Math.floor(balls / 6)
+    completedOvers: Math.floor(balls / 6),
+    ballRuns: overBallRunMap(model)
   };
 }
 
 function autoSettleOverNumber(marketName) {
   const name = String(marketName || "");
+  if (lambiTwentyOverTeam(name)) return 20;
   if (/Odd\s+Run\s+Bhav/i.test(name)) return null;
-  const match = name.match(/^(\d{1,2})\s*Over\b/i);
+  const match = normalizeFancyMarketLabel(name).match(/^(\d{1,2})\s*Over\b/i);
   if (!match) return null;
   const over = Number(match[1]);
   return Number.isFinite(over) && over > 0 ? over : null;
+}
+
+function autoSettleBallPoint(marketName) {
+  const match = String(marketName || "").match(/^(\d{1,2})\.(\d)\s*Ball\s*Run\b/i);
+  if (!match) return null;
+  const overNumber = Number(match[1]) + 1;
+  const ballNumber = Number(match[2]);
+  if (!Number.isFinite(overNumber) || !Number.isFinite(ballNumber) || ballNumber < 1 || ballNumber > 6) return null;
+  return { overNumber, ballNumber };
 }
 
 function autoSettleResultForFancyBet(bet, resultRuns) {
@@ -2152,6 +2333,8 @@ async function autoSettleFancyBetsFromScore() {
     if (String(bet.eventId || "") !== String(selectedEventId || "")) return false;
     if (bet.status !== "PENDING") return false;
     if (autoSettlingBetIds.has(bet.id)) return false;
+    const ballPoint = autoSettleBallPoint(bet.marketName);
+    if (ballPoint) return score.ballRuns.has(`${ballPoint.overNumber}.${ballPoint.ballNumber}`);
     const overNo = autoSettleOverNumber(bet.marketName);
     return overNo && score.completedOvers >= overNo;
   });
@@ -2159,11 +2342,13 @@ async function autoSettleFancyBetsFromScore() {
   if (!candidates.length) return;
 
   await Promise.all(candidates.map(async (bet) => {
-    const result = autoSettleResultForFancyBet(bet, score.runs);
+    const ballPoint = autoSettleBallPoint(bet.marketName);
+    const resultRuns = ballPoint ? score.ballRuns.get(`${ballPoint.overNumber}.${ballPoint.ballNumber}`) : score.runs;
+    const result = autoSettleResultForFancyBet(bet, resultRuns);
     if (!result) return;
     autoSettlingBetIds.add(bet.id);
     try {
-      await settleBet(bet.id, result, { silent: true, resultRun: score.runs });
+      await settleBet(bet.id, result, { silent: true, resultRun: resultRuns });
     } finally {
       autoSettlingBetIds.delete(bet.id);
     }
@@ -2190,11 +2375,12 @@ async function settleFancyMarketByRun(seedBetId) {
     return;
   }
 
+  const seedGroupKey = fancySettlementGroupKey(seedBet);
   const relatedBets = (bettingLedger.bets || []).filter((bet) => (
     bet.marketType === "FANCY" &&
     bet.status === "PENDING" &&
     String(bet.eventId || "") === String(seedBet.eventId || "") &&
-    String(bet.marketKey || "") === String(seedBet.marketKey || "")
+    fancySettlementGroupKey(bet) === seedGroupKey
   ));
 
   if (!relatedBets.length) {
@@ -2216,7 +2402,7 @@ async function settleFancyMarketByRun(seedBetId) {
 }
 
 function showFancyLadder(rowData) {
-  const bets = currentUserFancyBets(rowData.key);
+  const bets = currentUserFancyBets(rowData);
   const rows = fancyLadderRows(bets, isMasterSession());
   const existing = document.querySelector(".ladder-modal-layer");
   if (existing) existing.remove();
@@ -2394,6 +2580,10 @@ function betRateDisplay(bet) {
   return bet?.marketType === "FANCY" ? simpleValue(betRateValue(bet)) : simpleValue(bet?.odds);
 }
 
+function betRunDisplay(bet) {
+  return bet?.marketType === "FANCY" ? simpleValue(betRunValue(bet)) : "-";
+}
+
 function betResultRunDisplay(bet) {
   return bet?.resultRun !== undefined && bet.resultRun !== null && bet.resultRun !== "" ? simpleValue(bet.resultRun) : "-";
 }
@@ -2411,18 +2601,23 @@ function accountMetrics() {
   if (!session) return null;
   if (isMasterSession()) {
     const master = masterBookSummary();
+    const ledgerUser = userLedgerRecord(session.username);
     return {
       username: session.username,
+      displayName: ledgerUser.name || session.name || session.username,
       balance: master.balance,
-      exposure: master.exposure
+      exposure: master.exposure,
+      pnl: master.pnl || 0
     };
   }
   const summary = userSummary(session.username);
   const ledgerUser = userLedgerRecord(session.username);
   return {
     username: session.username,
+    displayName: ledgerUser.name || session.name || session.username,
     balance: ledgerUser.balance ?? summary.balance ?? 0,
-    exposure: summary.exposure ?? 0
+    exposure: summary.exposure ?? 0,
+    pnl: summary.pnl || 0
   };
 }
 
@@ -2438,8 +2633,8 @@ function renderAccountBar() {
   accountBar.classList.remove("hidden");
   accountBar.innerHTML = `
     <div class="account-stat">
-      <span>User</span>
-      <strong>${simpleValue(metrics.username)}</strong>
+      <span>Name</span>
+      <strong title="${simpleValue(metrics.username)}">${simpleValue(metrics.displayName)}</strong>
     </div>
     <div class="account-stat">
       <span>Balance</span>
@@ -2449,8 +2644,12 @@ function renderAccountBar() {
       <span>Exposure</span>
       <strong>${displayMoney(metrics.exposure)}</strong>
     </div>
+    <div class="account-stat">
+      <span>P/L</span>
+      <strong class="${Number(metrics.pnl || 0) < 0 ? "loss" : "profit"}">${Number(metrics.pnl || 0) < 0 ? "-" : "+"}${displayMoney(Math.abs(Number(metrics.pnl || 0)))}</strong>
+    </div>
     <button type="button" class="bet-slip-btn">Bet Slip</button>
-    <button type="button" class="logout-btn">Logout</button>
+    <button type="button" class="logout-btn">LOG OUT</button>
   `;
   accountBar.querySelector(".bet-slip-btn")?.addEventListener("click", showBetSlipModal);
   accountBar.querySelector(".logout-btn")?.addEventListener("click", logout);
@@ -2567,18 +2766,19 @@ function createBettingPanel() {
     <div class="ledger-table-wrap">
       <h3>${isMaster ? "Recent Bets" : "My Bets"}</h3>
       <table class="ledger-table">
-        <thead><tr><th>User</th><th>Event</th><th>Market</th><th>Side</th><th>Rate</th><th>Stake</th><th>Status</th><th>Result</th><th>P&L</th>${isMaster ? "<th>Settle</th>" : ""}</tr></thead>
+        <thead><tr>${isMaster ? "<th>User</th>" : ""}<th>Match</th><th>Market</th><th>Side</th><th>Run</th><th>Rate</th><th>Stake</th><th>Result</th><th>Status</th><th>P&L</th>${isMaster ? "<th>Settle</th>" : ""}</tr></thead>
         <tbody>
           ${myBets.map((bet) => `
             <tr>
-              <td>${simpleValue(bet.username)}</td>
+              ${isMaster ? `<td>${simpleValue(bet.username)}</td>` : ""}
               <td>${simpleValue(bet.eventName)}</td>
               <td>${simpleValue(bet.marketName)}</td>
               <td>${simpleValue(bet.side)}</td>
+              <td>${betRunDisplay(bet)}</td>
               <td>${betRateDisplay(bet)}</td>
               <td>${displayMoney(bet.stake)}</td>
-              <td>${simpleValue(betStatusValue(bet))}</td>
               <td>${betResultRunDisplay(bet)}</td>
+              <td>${simpleValue(betStatusValue(bet))}</td>
               <td>${betPnlDisplay(bet, isMaster)}</td>
               ${isMaster ? `<td>${bet.status === "PENDING" ? `
                 ${bet.marketType === "FANCY" ? `
@@ -2591,7 +2791,7 @@ function createBettingPanel() {
                 `}
               ` : simpleValue(bet.result)}</td>` : ""}
             </tr>
-          `).join("") || `<tr><td colspan="${isMaster ? 10 : 9}">No bets placed yet.</td></tr>`}
+          `).join("") || `<tr><td colspan="${isMaster ? 11 : 9}">No bets placed yet.</td></tr>`}
         </tbody>
       </table>
     </div>

@@ -68,7 +68,7 @@ input {
   display: flex;
   align-items: stretch;
   gap: 8px;
-  max-width: min(620px, 58vw);
+  max-width: min(760px, 66vw);
 }
 
 .account-stat {
@@ -94,10 +94,19 @@ input {
   white-space: nowrap;
 }
 
+.account-stat strong.profit {
+  color: #70e6a1;
+}
+
+.account-stat strong.loss {
+  color: #ff8585;
+}
+
 .bet-slip-btn,
 .logout-btn {
   border: 0;
   border-radius: 8px;
+  min-height: 48px;
   padding: 0 14px;
   font-weight: 900;
   cursor: pointer;
@@ -117,6 +126,7 @@ input {
 
 .event-tabs-wrap {
   margin-top: 12px;
+  margin-bottom: 18px;
   background: rgba(15, 17, 22, 0.88);
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -676,6 +686,7 @@ input {
 .market-table th:nth-child(3),
 .market-table td:nth-child(3) {
   width: 10%;
+  padding: 0;
 }
 
 .market-table td:nth-child(2),
@@ -746,13 +757,41 @@ input {
 .ladder-btn {
   width: 28px;
   height: 28px;
-  margin-top: 6px;
+  flex: 0 0 auto;
+  margin-left: 8px;
   border: 1px solid #d8b86b;
   border-radius: 6px;
   background: #1f2b37;
   color: #f5d271;
   font-weight: 900;
   cursor: pointer;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+}
+
+.ladder-icon {
+  position: relative;
+  display: inline-block;
+  width: 13px;
+  height: 17px;
+  border-left: 2px solid currentColor;
+  border-right: 2px solid currentColor;
+}
+
+.ladder-icon::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  top: 3px;
+  height: 2px;
+  background: currentColor;
+  box-shadow: 0 5px 0 currentColor, 0 10px 0 currentColor;
+}
+
+.ladder-btn:hover {
+  background: #293846;
 }
 
 .market-status {
@@ -776,6 +815,8 @@ input {
 .price-box {
   min-height: 74px;
   height: 100%;
+  padding: 0;
+  margin: 0;
   border-radius: 0;
   display: grid;
   place-content: center;
@@ -1212,6 +1253,40 @@ pre {
   border-bottom: 1px solid var(--line);
 }
 
+.bet-entry-outcome {
+  display: grid;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.bet-entry-outcome-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.bet-entry-outcome-row strong {
+  color: var(--text);
+  font-size: 0.98rem;
+}
+
+.bet-entry-outcome-row.profit strong {
+  color: #70e6a1;
+}
+
+.bet-entry-outcome-row.loss strong {
+  color: #ff8585;
+}
+
 .bet-entry-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1363,18 +1438,44 @@ pre {
   .account-bar {
     position: static;
     transform: none;
-    justify-content: flex-end;
+    justify-content: flex-start;
+    flex-wrap: wrap;
     max-width: none;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-
-  .account-bar::-webkit-scrollbar {
-    display: none;
+    overflow: visible;
+    gap: 6px 10px;
   }
 
   .account-stat {
-    min-width: 86px;
+    width: min(108px, calc(50vw - 18px));
+    min-height: 48px;
+    padding: 6px 8px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: rgba(24, 27, 34, 0.88);
+    display: inline-flex;
+    flex-direction: column;
+    align-items: baseline;
+    gap: 2px;
+  }
+
+  .account-stat span {
+    font-size: 0.62rem;
+  }
+
+  .account-stat strong {
+    margin-top: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 0.76rem;
+  }
+
+  .bet-slip-btn,
+  .logout-btn {
+    width: min(108px, calc(50vw - 18px));
+    min-height: 48px;
+    padding: 0 10px;
+    font-size: 0.76rem;
   }
 
   .betting-head {
@@ -1431,6 +1532,11 @@ pre {
     grid-template-columns: 1fr;
   }
 
+  .score-player-card {
+    padding-left: 0;
+    padding-right: 0;
+  }
+
   .scorecard-grid {
     overflow-x: auto;
     scrollbar-width: none;
@@ -1441,8 +1547,25 @@ pre {
   }
 
   .scorecard-grid-row {
-    grid-template-columns: minmax(150px, 1fr) repeat(5, 52px);
-    min-width: 410px;
+    grid-template-columns: minmax(118px, 1fr) repeat(5, 40px);
+    min-width: 318px;
+    min-height: 32px;
+    font-size: 0.72rem;
+  }
+
+  .scorecard-grid-head {
+    min-height: 30px;
+    font-size: 0.64rem;
+  }
+
+  .score-player-card .scorecard-grid span {
+    padding: 6px 5px;
+  }
+
+  .score-player-card .scorecard-grid .batter-name-cell,
+  .score-player-card .scorecard-grid .bowler-name-cell {
+    padding-left: 0;
+    gap: 4px;
   }
 
   .score-player-card {
