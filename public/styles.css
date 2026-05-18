@@ -103,6 +103,8 @@ input {
 }
 
 .bet-slip-btn,
+.manual-odds-btn,
+.message-btn,
 .logout-btn {
   border: 0;
   border-radius: 8px;
@@ -116,6 +118,18 @@ input {
 .bet-slip-btn {
   background: linear-gradient(130deg, #e4c57f, var(--gold));
   color: #151515;
+}
+
+.manual-odds-btn {
+  border: 1px solid rgba(224, 190, 116, 0.42);
+  background: rgba(224, 190, 116, 0.12);
+  color: #f5d271;
+}
+
+.message-btn {
+  border: 1px solid rgba(255, 100, 100, 0.42);
+  background: rgba(255, 100, 100, 0.1);
+  color: #ffb0b0;
 }
 
 .logout-btn {
@@ -132,6 +146,38 @@ input {
   border-radius: 10px;
   padding: 10px;
   box-shadow: var(--shadow);
+}
+
+.message-bar {
+  position: relative;
+  overflow: hidden;
+  min-height: 34px;
+  margin: 4px 0 12px;
+  border: 1px solid rgba(255, 100, 100, 0.36);
+  border-radius: 8px;
+  background: rgba(255, 100, 100, 0.08);
+}
+
+.message-marquee {
+  position: absolute;
+  top: 50%;
+  left: 100%;
+  transform: translateY(-50%);
+  white-space: nowrap;
+  color: #ff5656;
+  font-size: 1rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  animation: messageMarquee 16s linear infinite;
+}
+
+@keyframes messageMarquee {
+  from {
+    transform: translate(0, -50%);
+  }
+  to {
+    transform: translate(calc(-100vw - 100%), -50%);
+  }
 }
 
 .event-tabs {
@@ -747,11 +793,131 @@ input {
   white-space: nowrap;
 }
 
+.manual-odds-pill {
+  flex: 0 0 auto;
+  border: 1px solid rgba(245, 210, 113, 0.55);
+  border-radius: 999px;
+  padding: 2px 6px;
+  color: #f5d271;
+  background: rgba(245, 210, 113, 0.1);
+  font-size: 0.64rem;
+  font-weight: 900;
+}
+
 .seen-range {
   display: block;
   margin-top: 3px;
   color: var(--muted);
   font-size: 0.72rem;
+}
+
+.manual-odds-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 250;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(3, 5, 10, 0.45);
+}
+
+.manual-odds-modal {
+  width: min(1180px, 100%);
+  max-height: min(82vh, 780px);
+  display: grid;
+  grid-template-rows: auto 1fr;
+  border: 1px solid rgba(224, 190, 116, 0.42);
+  border-radius: 12px;
+  background: #111821;
+  box-shadow: 0 24px 58px rgba(0, 0, 0, 0.46);
+  overflow: hidden;
+}
+
+.manual-odds-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 15px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.manual-odds-head span,
+.manual-odds-table small {
+  display: block;
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+}
+
+.manual-odds-head strong {
+  display: block;
+  margin-top: 3px;
+  color: #f5d271;
+}
+
+.manual-odds-close {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  width: 36px;
+  height: 36px;
+  background: #202b38;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.manual-odds-body {
+  overflow: auto;
+}
+
+.manual-odds-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 920px;
+}
+
+.manual-odds-table th,
+.manual-odds-table td {
+  border-bottom: 1px solid var(--line);
+  padding: 9px 10px;
+  text-align: left;
+}
+
+.manual-odds-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  color: #171717;
+  background: linear-gradient(130deg, #d8b86b, #bf9a49);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+}
+
+.manual-odds-table input,
+.manual-odds-table select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 8px 9px;
+  background: #0c1118;
+  color: var(--text);
+  outline: none;
+}
+
+.manual-odds-table button {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 8px 10px;
+  margin: 2px;
+  background: #202b38;
+  color: var(--text);
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.manual-odds-table .manual-save-btn {
+  background: linear-gradient(130deg, #e4c57f, var(--gold));
+  color: #151515;
 }
 
 .ladder-btn {
@@ -1471,6 +1637,8 @@ pre {
   }
 
   .bet-slip-btn,
+  .manual-odds-btn,
+  .message-btn,
   .logout-btn {
     width: min(108px, calc(50vw - 18px));
     min-height: 48px;

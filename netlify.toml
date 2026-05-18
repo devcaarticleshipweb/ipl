@@ -23,6 +23,16 @@
   status = 200
 
 [[redirects]]
+  from = "/api/manual-odds"
+  to = "/.netlify/functions/manual-odds"
+  status = 200
+
+[[redirects]]
+  from = "/api/message"
+  to = "/.netlify/functions/message"
+  status = 200
+
+[[redirects]]
   from = "/api/supabase-config"
   to = "/.netlify/functions/supabase-config"
   status = 200

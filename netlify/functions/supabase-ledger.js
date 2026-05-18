@@ -10,6 +10,12 @@ function toNumber(value, fallback = 0) {
   return Number.isFinite(number) ? number : fallback;
 }
 
+function optionalNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
 function money(value) {
   return Number(toNumber(value, 0).toFixed(2));
 }
@@ -86,7 +92,36 @@ function appBet(row) {
     placedAt: row.placed_at,
     settledAt: row.settled_at,
     statusAtSelection: row.status_at_selection,
+    oddsSource: row.odds_source,
     verifiedAt: row.verified_at
+  };
+}
+
+function appManualOdds(row) {
+  return {
+    id: row.id,
+    eventId: row.event_id,
+    marketKey: row.market_key,
+    marketName: row.market_name,
+    marketType: row.market_type,
+    backPrice: row.back_price,
+    layPrice: row.lay_price,
+    backSize: row.back_size,
+    laySize: row.lay_size,
+    status: row.status,
+    enabled: row.enabled,
+    updatedBy: row.updated_by,
+    updatedAt: row.updated_at
+  };
+}
+
+function appMessage(row) {
+  return {
+    id: row?.id || "global",
+    message: row?.message || "",
+    enabled: row?.enabled === true,
+    updatedBy: row?.updated_by || "",
+    updatedAt: row?.updated_at || ""
   };
 }
 
@@ -237,6 +272,7 @@ async function placeBet(payload) {
       result: "",
       pnl: 0,
       status_at_selection: payload.statusAtSelection,
+      odds_source: payload.oddsSource || "api",
       verified_at: payload.verifiedAt
     }])
   });
@@ -248,10 +284,11 @@ async function settleBet(payload) {
   const betId = String(payload.betId || "");
   const result = String(payload.result || "").toUpperCase();
   const resultRun = toNumber(payload.resultRun, null);
+  const force = payload.force === true;
   const bets = await supabaseFetch(`/rest/v1/bets?select=*&id=eq.${encodeURIComponent(betId)}&limit=1`);
   const bet = bets?.[0];
   if (!bet) return { statusCode: 404, error: "Bet not found." };
-  if (bet.status !== "PENDING") return { statusCode: 400, error: "Bet is already settled." };
+  if (bet.status !== "PENDING" && !force) return { statusCode: 400, error: "Bet is already settled." };
 
   const users = await supabaseFetch(`/rest/v1/users?select=*&username=eq.${encodeURIComponent(bet.username)}&limit=1`);
   const user = users?.[0];
@@ -259,15 +296,22 @@ async function settleBet(payload) {
   const profit = toNumber(bet.estimated_profit, 0);
   const balance = toNumber(user?.balance, 0);
   let pnl = 0;
-  let nextBalance = balance;
+  let pendingBalance = balance;
+
+  if (bet.status === "SETTLED") {
+    if (bet.result === "WIN") pendingBalance = money(pendingBalance - liability - profit);
+    else if (bet.result === "VOID") pendingBalance = money(pendingBalance - liability);
+  }
+
+  let nextBalance = pendingBalance;
 
   if (result === "WIN") {
     pnl = profit;
-    nextBalance = money(balance + liability + profit);
+    nextBalance = money(pendingBalance + liability + profit);
   } else if (result === "LOSE") {
     pnl = -liability;
   } else if (result === "VOID") {
-    nextBalance = money(balance + liability);
+    nextBalance = money(pendingBalance + liability);
   } else {
     return { statusCode: 400, error: "Result must be WIN, LOSE or VOID." };
   }
@@ -283,6 +327,66 @@ async function settleBet(payload) {
   return { bet: appBet(updated[0]), ledger: await getLedger(), backend: "supabase" };
 }
 
+async function getManualOdds(payload) {
+  const eventId = String(payload.eventId || "").trim();
+  if (!eventId) return { overrides: [], backend: "supabase" };
+  const rows = await supabaseFetch(`/rest/v1/manual_odds_overrides?select=*&event_id=eq.${encodeURIComponent(eventId)}&order=updated_at.desc`);
+  return { overrides: (rows || []).map(appManualOdds), backend: "supabase" };
+}
+
+async function saveManualOdds(payload) {
+  const eventId = String(payload.eventId || "").trim();
+  const marketKey = String(payload.marketKey || "").trim();
+  if (!eventId || !marketKey) return { statusCode: 400, error: "Event ID and market key are required." };
+
+  const enabled = payload.enabled !== false;
+  const row = {
+    event_id: eventId,
+    market_key: marketKey,
+    market_name: payload.marketName || "",
+    market_type: payload.marketType || "",
+    back_price: optionalNumber(payload.backPrice),
+    lay_price: optionalNumber(payload.layPrice),
+    back_size: optionalNumber(payload.backSize),
+    lay_size: optionalNumber(payload.laySize),
+    status: String(payload.status || "").trim(),
+    enabled,
+    updated_by: payload.updatedBy || "",
+    updated_at: new Date().toISOString()
+  };
+
+  const saved = await supabaseFetch("/rest/v1/manual_odds_overrides?on_conflict=event_id,market_key", {
+    method: "POST",
+    headers: { prefer: "resolution=merge-duplicates,return=representation" },
+    body: JSON.stringify([row])
+  });
+  return { override: appManualOdds(saved[0]), backend: "supabase" };
+}
+
+async function getAppMessage() {
+  const rows = await supabaseFetch("/rest/v1/app_messages?select=*&id=eq.global&limit=1");
+  return { message: appMessage(rows?.[0] || null), backend: "supabase" };
+}
+
+async function saveAppMessage(payload) {
+  const message = String(payload.message || "").trim();
+  const enabled = Boolean(message);
+  const row = {
+    id: "global",
+    message,
+    enabled,
+    updated_by: payload.updatedBy || "",
+    updated_at: new Date().toISOString()
+  };
+
+  const saved = await supabaseFetch("/rest/v1/app_messages?on_conflict=id", {
+    method: "POST",
+    headers: { prefer: "resolution=merge-duplicates,return=representation" },
+    body: JSON.stringify([row])
+  });
+  return { message: appMessage(saved[0]), backend: "supabase" };
+}
+
 async function runSupabaseAction(action, payload = {}) {
   if (action === "getLedger") return getLedger();
   if (action === "auth") return auth(payload);
@@ -291,6 +395,10 @@ async function runSupabaseAction(action, payload = {}) {
   if (action === "presence") return updatePresence(payload);
   if (action === "placeBet") return placeBet(payload);
   if (action === "settleBet") return settleBet(payload);
+  if (action === "getManualOdds") return getManualOdds(payload);
+  if (action === "saveManualOdds") return saveManualOdds(payload);
+  if (action === "getAppMessage") return getAppMessage();
+  if (action === "saveAppMessage") return saveAppMessage(payload);
   return { statusCode: 404, error: "Unknown Supabase action." };
 }
 

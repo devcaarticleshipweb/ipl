@@ -620,6 +620,7 @@ function Handle-BetSettleApi {
     $BetId = [string]$Body.betId
     $Result = ([string]$Body.result).ToUpperInvariant()
     $ResultRun = Get-NumericValue -Value $Body.resultRun
+    $Force = $Body.force -eq $true
     $Ledger = Get-BettingLedger
     $Bets = @($Ledger["bets"])
     $Bet = @($Bets | Where-Object { [string]$_.id -eq $BetId } | Select-Object -First 1)
@@ -628,7 +629,7 @@ function Handle-BetSettleApi {
       return
     }
     $Bet = $Bet[0]
-    if ($Bet.status -ne "PENDING") {
+    if ($Bet.status -ne "PENDING" -and -not $Force) {
       Write-Json -Response $Response -StatusCode 400 -Payload @{ error = "Bet is already settled." }
       return
     }
@@ -642,15 +643,25 @@ function Handle-BetSettleApi {
     if ($null -eq $Stake) { $Stake = 0 }
     if ($null -eq $Liability) { $Liability = $Stake }
     if ($null -eq $Profit) { $Profit = 0 }
+    $PendingBalance = $Balance
+
+    if ($Bet.status -eq "SETTLED") {
+      if ($Bet.result -eq "WIN") {
+        $PendingBalance = [Math]::Round(($PendingBalance - $Liability - $Profit), 2)
+      } elseif ($Bet.result -eq "VOID") {
+        $PendingBalance = [Math]::Round(($PendingBalance - $Liability), 2)
+      }
+    }
 
     if ($Result -eq "WIN") {
       $Bet.pnl = $Profit
-      $User.balance = [Math]::Round(($Balance + $Liability + $Profit), 2)
+      $User.balance = [Math]::Round(($PendingBalance + $Liability + $Profit), 2)
     } elseif ($Result -eq "LOSE") {
       $Bet.pnl = -1 * $Liability
+      $User.balance = $PendingBalance
     } elseif ($Result -eq "VOID") {
       $Bet.pnl = 0
-      $User.balance = [Math]::Round(($Balance + $Liability), 2)
+      $User.balance = [Math]::Round(($PendingBalance + $Liability), 2)
     } else {
       Write-Json -Response $Response -StatusCode 400 -Payload @{ error = "Result must be WIN, LOSE or VOID." }
       return

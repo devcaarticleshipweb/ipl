@@ -35,14 +35,43 @@ create table if not exists public.bets (
   placed_at timestamptz not null default now(),
   settled_at timestamptz,
   status_at_selection text,
+  odds_source text,
   verified_at timestamptz
+);
+
+create table if not exists public.manual_odds_overrides (
+  id uuid primary key default gen_random_uuid(),
+  event_id text not null,
+  market_key text not null,
+  market_name text,
+  market_type text,
+  back_price numeric,
+  lay_price numeric,
+  back_size numeric,
+  lay_size numeric,
+  status text,
+  enabled boolean not null default true,
+  updated_by text,
+  updated_at timestamptz not null default now(),
+  unique(event_id, market_key)
+);
+
+create table if not exists public.app_messages (
+  id text primary key default 'global',
+  message text,
+  enabled boolean not null default false,
+  updated_by text,
+  updated_at timestamptz not null default now()
 );
 
 alter table public.users replica identity full;
 alter table public.bets replica identity full;
+alter table public.manual_odds_overrides replica identity full;
+alter table public.app_messages replica identity full;
 
 alter table public.bets
-add column if not exists result_run numeric;
+add column if not exists result_run numeric,
+add column if not exists odds_source text;
 
 alter table public.users
 add column if not exists last_login_at timestamptz,
@@ -56,13 +85,43 @@ exception
   when duplicate_object then null;
 end $$;
 
+do $$
+begin
+  alter publication supabase_realtime add table public.manual_odds_overrides;
+exception
+  when duplicate_object then null;
+end $$;
+
+do $$
+begin
+  alter publication supabase_realtime add table public.app_messages;
+exception
+  when duplicate_object then null;
+end $$;
+
 alter table public.users enable row level security;
 alter table public.bets enable row level security;
+alter table public.manual_odds_overrides enable row level security;
+alter table public.app_messages enable row level security;
 
 drop policy if exists "allow anon realtime bets" on public.bets;
+drop policy if exists "allow anon realtime manual odds" on public.manual_odds_overrides;
+drop policy if exists "allow anon realtime app messages" on public.app_messages;
 
 create policy "allow anon realtime bets"
 on public.bets
+for select
+to anon
+using (true);
+
+create policy "allow anon realtime manual odds"
+on public.manual_odds_overrides
+for select
+to anon
+using (true);
+
+create policy "allow anon realtime app messages"
+on public.app_messages
 for select
 to anon
 using (true);

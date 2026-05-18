@@ -9,6 +9,8 @@ const loginUser = document.querySelector("#login-user");
 const loginPass = document.querySelector("#login-pass");
 const loginError = document.querySelector("#login-error");
 const accountBar = document.querySelector("#account-bar");
+const messageBar = document.querySelector("#message-bar");
+const messageMarquee = document.querySelector("#message-marquee");
 
 const REFRESH_INTERVAL_MS = 800;
 const LIVE_SCORE_REFRESH_INTERVAL_MS = 1000;
@@ -55,6 +57,11 @@ let bettingLedger = {
   users: [],
   bets: [],
   summary: []
+};
+let manualOddsOverrides = new Map();
+let appMessage = {
+  message: "",
+  enabled: false
 };
 let pendingStatsRows = [];
 let lastAuthError = "";
@@ -516,6 +523,58 @@ function buildOddsRows(value) {
   return [...buildBookmakerRows(root), ...buildFancyRows(root)];
 }
 
+function manualOverrideKey(eventId, marketKey) {
+  return `${eventId || ""}::${marketKey || ""}`;
+}
+
+function normalizeManualOverride(row) {
+  return {
+    eventId: row.eventId,
+    marketKey: row.marketKey,
+    marketName: row.marketName,
+    marketType: row.marketType,
+    backPrice: row.backPrice,
+    layPrice: row.layPrice,
+    backSize: row.backSize,
+    laySize: row.laySize,
+    status: row.status,
+    enabled: row.enabled !== false,
+    updatedBy: row.updatedBy,
+    updatedAt: row.updatedAt
+  };
+}
+
+async function fetchManualOdds(eventId = selectedEventId) {
+  if (!eventId) return [];
+  try {
+    const response = await fetch(`/api/manual-odds?eventId=${encodeURIComponent(eventId)}&_=${Date.now()}`, { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || payload.error || "Unable to load manual odds.");
+    const overrides = (payload.overrides || []).map(normalizeManualOverride);
+    overrides.forEach((override) => {
+      manualOddsOverrides.set(manualOverrideKey(override.eventId, override.marketKey), override);
+    });
+    return overrides;
+  } catch (error) {
+    console.warn("Unable to load manual odds", error);
+    return [];
+  }
+}
+
+function applyManualOverrides(rows, eventId = selectedEventId) {
+  return rows.map((row) => {
+    const override = manualOddsOverrides.get(manualOverrideKey(eventId, row.key));
+    if (!override || !override.enabled) return row;
+    const next = { ...row, manualOverride: true, manualUpdatedAt: override.updatedAt };
+    if (override.backPrice !== null && override.backPrice !== undefined && override.backPrice !== "") next.backPrice = override.backPrice;
+    if (override.layPrice !== null && override.layPrice !== undefined && override.layPrice !== "") next.layPrice = override.layPrice;
+    if (override.backSize !== null && override.backSize !== undefined && override.backSize !== "") next.backSize = override.backSize;
+    if (override.laySize !== null && override.laySize !== undefined && override.laySize !== "") next.laySize = override.laySize;
+    if (override.status) next.status = normalizeStatus(override.status);
+    return next;
+  });
+}
+
 function updateSeenRange(key, backPrice, layPrice) {
   const storageKey = makeStatsKey(selectedEventId, key);
   const stats = rowStats.get(storageKey) || { min: null, max: null };
@@ -659,6 +718,46 @@ async function fetchJsonPayload(url) {
   }
 
   return payload;
+}
+
+function renderMessageBar() {
+  const message = String(appMessage?.message || "").trim();
+  const visible = Boolean(appMessage?.enabled && message);
+  if (!messageBar || !messageMarquee) return;
+  messageBar.classList.toggle("hidden", !visible);
+  messageMarquee.textContent = visible ? message : "";
+}
+
+async function fetchAppMessage() {
+  try {
+    const response = await fetch(`/api/message?_=${Date.now()}`, { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || payload.error || "Unable to load message.");
+    appMessage = payload.message || { message: "", enabled: false };
+    renderMessageBar();
+    return appMessage;
+  } catch (error) {
+    console.warn("Unable to load message", error);
+    return appMessage;
+  }
+}
+
+async function saveAppMessage(message) {
+  const response = await fetch("/api/message", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    cache: "no-store",
+    body: JSON.stringify({
+      action: "saveAppMessage",
+      message,
+      updatedBy: currentSession()?.username || ""
+    })
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.detail || payload.error || "Unable to save message.");
+  appMessage = payload.message || { message: "", enabled: false };
+  renderMessageBar();
+  return appMessage;
 }
 
 const BALL_STATUS_MAP = {
@@ -1975,7 +2074,8 @@ async function executePlaceBet(rowData, side, odds, rate, stake) {
     const latestPayload = await latestResponse.json();
     if (!latestResponse.ok) throw new Error(latestPayload.detail || latestPayload.error || "Unable to verify latest odds.");
 
-    const latestRows = buildOddsRows(latestPayload.data);
+    await fetchManualOdds(selectedEventId);
+    const latestRows = applyManualOverrides(buildOddsRows(latestPayload.data));
     const latestRow = latestRows.find((row) => row.key === rowData.key);
     if (!latestRow) {
       throw new Error("This market is no longer available.");
@@ -2017,6 +2117,7 @@ async function executePlaceBet(rowData, side, odds, rate, stake) {
         run,
         target: run,
         rate: rateValue,
+        oddsSource: latestRow.manualOverride ? "manual" : "api",
         liability,
         estimatedProfit,
         stake,
@@ -2144,6 +2245,12 @@ function createMarketSection(title, columns, rows, fancyMode = false) {
     name.className = "name-text";
     name.textContent = simpleValue(rowData.label);
     nameLine.append(name);
+    if (rowData.manualOverride && isMasterSession()) {
+      const manual = document.createElement("span");
+      manual.className = "manual-odds-pill";
+      manual.textContent = "MANUAL";
+      nameLine.append(manual);
+    }
     if (!fancyMode) {
       const positionNode = createBookmakerPositionNode(bookmakerPositionForRunner(rowData));
       if (positionNode) nameLine.append(positionNode);
@@ -2357,6 +2464,50 @@ async function autoSettleFancyBetsFromScore() {
   renderCurrentData();
 }
 
+function bookmakerRunnerOutcome(status) {
+  const normalized = normalizeStatus(status).replace(/[^A-Z]/g, "_");
+  if (/\b(WINNER|WON|WIN)\b/.test(normalized)) return "WINNER";
+  if (/\b(LOSER|LOST|LOSE)\b/.test(normalized)) return "LOSER";
+  return "";
+}
+
+async function autoSettleBookmakerBetsFromRows(rows) {
+  const outcomeByKey = new Map();
+  rows
+    .filter((row) => row.marketType === "BOOKMAKER")
+    .forEach((row) => {
+      const outcome = bookmakerRunnerOutcome(row.status);
+      if (outcome) outcomeByKey.set(row.key, outcome);
+    });
+
+  if (outcomeByKey.size === 0) return;
+
+  const candidates = (bettingLedger.bets || []).filter((bet) => (
+    bet.marketType === "BOOKMAKER" &&
+    bet.status === "PENDING" &&
+    String(bet.eventId || "") === String(selectedEventId || "") &&
+    outcomeByKey.has(bet.marketKey) &&
+    !autoSettlingBetIds.has(bet.id)
+  ));
+
+  if (!candidates.length) return;
+
+  await Promise.all(candidates.map(async (bet) => {
+    const runnerOutcome = outcomeByKey.get(bet.marketKey);
+    const result = bet.side === "Back"
+      ? (runnerOutcome === "WINNER" ? "WIN" : "LOSE")
+      : (runnerOutcome === "WINNER" ? "LOSE" : "WIN");
+    autoSettlingBetIds.add(bet.id);
+    try {
+      await settleBet(bet.id, result, { silent: true });
+    } finally {
+      autoSettlingBetIds.delete(bet.id);
+    }
+  }));
+  await fetchBettingLedger({ force: true });
+  renderCurrentData();
+}
+
 async function settleFancyMarketByRun(seedBetId) {
   if (!isMasterSession()) return;
 
@@ -2376,9 +2527,10 @@ async function settleFancyMarketByRun(seedBetId) {
   }
 
   const seedGroupKey = fancySettlementGroupKey(seedBet);
+  const allowSettledCorrection = seedBet.status === "SETTLED";
   const relatedBets = (bettingLedger.bets || []).filter((bet) => (
     bet.marketType === "FANCY" &&
-    bet.status === "PENDING" &&
+    (allowSettledCorrection || bet.status === "PENDING") &&
     String(bet.eventId || "") === String(seedBet.eventId || "") &&
     fancySettlementGroupKey(bet) === seedGroupKey
   ));
@@ -2391,7 +2543,7 @@ async function settleFancyMarketByRun(seedBetId) {
   try {
     await Promise.all(relatedBets.map((bet) => {
       const result = autoSettleResultForFancyBet(bet, resultRuns);
-      return result ? settleBet(bet.id, result, { silent: true, resultRun: resultRuns }) : Promise.resolve();
+      return result ? settleBet(bet.id, result, { silent: true, resultRun: resultRuns, force: isMasterSession() }) : Promise.resolve();
     }));
     await fetchBettingLedger({ force: true });
     renderCurrentData();
@@ -2506,14 +2658,14 @@ async function adjustUserFunds(username, mode) {
   }
 }
 
-async function settleBet(betId, result, { silent = false, resultRun = "" } = {}) {
+async function settleBet(betId, result, { silent = false, resultRun = "", force = false } = {}) {
   if (!silent && !isMasterSession()) return;
 
   try {
     const response = await fetch("/api/bets/settle", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ betId, result, resultRun })
+      body: JSON.stringify({ betId, result, resultRun, force: Boolean(force || (isMasterSession() && !silent)) })
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.detail || payload.error || "Unable to settle bet.");
@@ -2648,9 +2800,13 @@ function renderAccountBar() {
       <span>P/L</span>
       <strong class="${Number(metrics.pnl || 0) < 0 ? "loss" : "profit"}">${Number(metrics.pnl || 0) < 0 ? "-" : "+"}${displayMoney(Math.abs(Number(metrics.pnl || 0)))}</strong>
     </div>
+    ${isMasterSession() ? '<button type="button" class="manual-odds-btn">Manual Odds</button>' : ""}
+    ${isMasterSession() ? '<button type="button" class="message-btn">Message</button>' : ""}
     <button type="button" class="bet-slip-btn">Bet Slip</button>
     <button type="button" class="logout-btn">LOG OUT</button>
   `;
+  accountBar.querySelector(".manual-odds-btn")?.addEventListener("click", showManualOddsModal);
+  accountBar.querySelector(".message-btn")?.addEventListener("click", editAppMessage);
   accountBar.querySelector(".bet-slip-btn")?.addEventListener("click", showBetSlipModal);
   accountBar.querySelector(".logout-btn")?.addEventListener("click", logout);
 }
@@ -2685,6 +2841,137 @@ function refreshOpenBetSlipModal() {
   const body = document.querySelector(".bet-slip-modal-body");
   if (!body) return;
   body.replaceChildren(createBettingPanel());
+}
+
+async function editAppMessage() {
+  if (!isMasterSession()) return;
+  const current = appMessage?.message || "";
+  const next = window.prompt("Message for all users. Leave blank to hide the message bar.", current);
+  if (next === null) return;
+  try {
+    await saveAppMessage(next);
+    showToast(String(next || "").trim() ? "Message updated." : "Message hidden.", "success");
+  } catch (error) {
+    showToast(error.message || "Unable to save message.", "error");
+  }
+}
+
+function manualFieldValue(value) {
+  return value === null || value === undefined ? "" : String(value);
+}
+
+function manualOddsRows() {
+  const rows = window.__fair91LastRows || [];
+  return rows.filter((row) => row.marketType === "BOOKMAKER" || row.marketType === "FANCY");
+}
+
+function showManualOddsModal() {
+  if (!isMasterSession()) return;
+  const existing = document.querySelector(".manual-odds-layer");
+  if (existing) existing.remove();
+
+  const rows = manualOddsRows();
+  const layer = document.createElement("div");
+  layer.className = "manual-odds-layer";
+  layer.innerHTML = `
+    <div class="manual-odds-modal" role="dialog" aria-modal="true">
+      <div class="manual-odds-head">
+        <div>
+          <span>Manual Odds</span>
+          <strong>${simpleValue(selectedEventName || selectedEventId)}</strong>
+        </div>
+        <button type="button" class="manual-odds-close">×</button>
+      </div>
+      <div class="manual-odds-body">
+        <table class="manual-odds-table">
+          <thead>
+            <tr><th>Market</th><th>Back/Yes Run</th><th>Lay/No Run</th><th>Back/Yes Rate</th><th>Lay/No Rate</th><th>Status</th><th>Action</th></tr>
+          </thead>
+          <tbody>
+            ${rows.map((row) => {
+              const override = manualOddsOverrides.get(manualOverrideKey(selectedEventId, row.key));
+              const enabled = override?.enabled !== false && Boolean(override);
+              return `
+                <tr data-market-key="${row.key}">
+                  <td>
+                    <strong>${simpleValue(row.label)}</strong>
+                    <small>${simpleValue(row.marketType)}${enabled ? " · MANUAL" : ""}</small>
+                  </td>
+                  <td><input name="backPrice" inputmode="decimal" value="${manualFieldValue(row.backPrice)}"></td>
+                  <td><input name="layPrice" inputmode="decimal" value="${manualFieldValue(row.layPrice)}"></td>
+                  <td><input name="backSize" inputmode="decimal" value="${manualFieldValue(row.backSize)}"></td>
+                  <td><input name="laySize" inputmode="decimal" value="${manualFieldValue(row.laySize)}"></td>
+                  <td>
+                    <select name="status">
+                      ${["ACTIVE", "SUSPENDED", "BALL_RUNNING", "OPEN", "WINNER", "LOSER"].map((status) => `<option value="${status}"${normalizeStatus(row.status) === status ? " selected" : ""}>${status}</option>`).join("")}
+                    </select>
+                  </td>
+                  <td>
+                    <button type="button" class="manual-save-btn">Save</button>
+                    <button type="button" class="manual-clear-btn">Live</button>
+                  </td>
+                </tr>
+              `;
+            }).join("") || '<tr><td colspan="7">Load odds first, then open Manual Odds.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+
+  layer.querySelector(".manual-odds-close").addEventListener("click", () => layer.remove());
+  layer.addEventListener("click", (event) => {
+    if (event.target === layer) layer.remove();
+  });
+  layer.querySelectorAll(".manual-save-btn").forEach((button) => {
+    button.addEventListener("click", () => saveManualOddsRow(button.closest("tr"), true));
+  });
+  layer.querySelectorAll(".manual-clear-btn").forEach((button) => {
+    button.addEventListener("click", () => saveManualOddsRow(button.closest("tr"), false));
+  });
+  document.body.append(layer);
+}
+
+async function saveManualOddsRow(tr, enabled) {
+  const row = manualOddsRows().find((item) => item.key === tr?.dataset?.marketKey);
+  if (!row) return;
+  const field = (name) => tr.querySelector(`[name="${name}"]`)?.value?.trim() || "";
+  const buttons = tr.querySelectorAll("button");
+  buttons.forEach((button) => { button.disabled = true; });
+
+  try {
+    const response = await fetch("/api/manual-odds", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify({
+        action: "saveManualOdds",
+        eventId: selectedEventId,
+        marketKey: row.key,
+        marketName: row.label,
+        marketType: row.marketType,
+        backPrice: field("backPrice"),
+        layPrice: field("layPrice"),
+        backSize: field("backSize"),
+        laySize: field("laySize"),
+        status: field("status"),
+        enabled,
+        updatedBy: currentSession()?.username || ""
+      })
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || payload.error || "Unable to save manual odds.");
+    if (payload.override) {
+      const override = normalizeManualOverride(payload.override);
+      manualOddsOverrides.set(manualOverrideKey(override.eventId, override.marketKey), override);
+    }
+    renderCurrentData();
+    showToast(enabled ? "Manual odds saved." : "Manual override disabled.", "success");
+  } catch (error) {
+    showToast(error.message, "error");
+  } finally {
+    buttons.forEach((button) => { button.disabled = false; });
+  }
 }
 
 function createBettingPanel() {
@@ -2780,7 +3067,7 @@ function createBettingPanel() {
               <td>${betResultRunDisplay(bet)}</td>
               <td>${simpleValue(betStatusValue(bet))}</td>
               <td>${betPnlDisplay(bet, isMaster)}</td>
-              ${isMaster ? `<td>${bet.status === "PENDING" ? `
+              ${isMaster ? `<td>
                 ${bet.marketType === "FANCY" ? `
                   <button type="button" class="settle-run-btn" data-bet-id="${bet.id}">Run</button>
                   <button type="button" class="settle-btn" data-bet-id="${bet.id}" data-result="VOID">V</button>
@@ -2789,7 +3076,7 @@ function createBettingPanel() {
                   <button type="button" class="settle-btn" data-bet-id="${bet.id}" data-result="LOSE">L</button>
                   <button type="button" class="settle-btn" data-bet-id="${bet.id}" data-result="VOID">V</button>
                 `}
-              ` : simpleValue(bet.result)}</td>` : ""}
+              </td>` : ""}
             </tr>
           `).join("") || `<tr><td colspan="${isMaster ? 11 : 9}">No bets placed yet.</td></tr>`}
         </tbody>
@@ -2823,8 +3110,8 @@ function createRawPanel(data) {
 
 function renderPayload(payload, preparedRows = null) {
   window.__fair91LastPayload = payload;
-  window.__fair91LastRows = preparedRows;
-  const rows = preparedRows || buildOddsRows(payload.data);
+  const rows = preparedRows || applyManualOverrides(buildOddsRows(payload.data));
+  window.__fair91LastRows = rows;
   const bookmakerRows = rows.filter((row) => row.marketType === "BOOKMAKER");
   const fancyRows = rows.filter((row) => row.marketType === "FANCY");
 
@@ -2854,7 +3141,7 @@ function renderCurrentData() {
   renderAccountBar();
   refreshOpenBetSlipModal();
   if (window.__fair91LastPayload) {
-    renderPayload(window.__fair91LastPayload, window.__fair91LastRows || null);
+    renderPayload(window.__fair91LastPayload, null);
   }
 }
 
@@ -2876,10 +3163,18 @@ async function startSupabaseRealtime() {
   const refreshLedger = () => {
     fetchBettingLedger({ force: true, timeoutMs: BACKGROUND_LEDGER_TIMEOUT_MS }).then(renderLedgerData);
   };
+  const refreshManualOdds = () => {
+    fetchManualOdds(selectedEventId).then(renderCurrentData);
+  };
+  const refreshMessage = () => {
+    fetchAppMessage();
+  };
 
   supabaseRealtime.channel = supabaseRealtime.client
     .channel("fair91-ledger")
     .on("postgres_changes", { event: "*", schema: "public", table: "bets" }, refreshLedger)
+    .on("postgres_changes", { event: "*", schema: "public", table: "manual_odds_overrides" }, refreshManualOdds)
+    .on("postgres_changes", { event: "*", schema: "public", table: "app_messages" }, refreshMessage)
     .subscribe();
 }
 
@@ -2930,9 +3225,11 @@ async function fetchSelectedEvent({ manual = false } = {}) {
     if (!oddsResult.ok) throw new Error(payload.detail || payload.error || "Request failed.");
     if (requestSeq < latestRenderedOddsSeq) return;
     latestRenderedOddsSeq = requestSeq;
-    const rows = buildOddsRows(payload.data);
+    await fetchManualOdds(selectedEventId);
+    const rows = applyManualOverrides(buildOddsRows(payload.data));
     queueSeenRangeSync(rows);
     renderPayload(payload, rows);
+    autoSettleBookmakerBetsFromRows(rows);
     setStatus("Live", `${selectedEventName || selectedEventId} - ${new Date(payload.fetchedAt).toLocaleTimeString()}`);
   } catch (error) {
     if (!hasRenderedData) renderError("Could not load odds", error.message);
@@ -3017,6 +3314,7 @@ async function initialize() {
     }
     loginRows = normalizeLogins(config.loginRows || []);
     eventRows = normalizeEvents(config.eventRows || []);
+    fetchAppMessage();
     fetchBettingLedger().then(renderCurrentData);
 
     if (loginRows.length === 0) {

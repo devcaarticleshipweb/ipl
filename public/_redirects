@@ -2,6 +2,8 @@
 /api/sheet-config /.netlify/functions/sheet-config 200
 /api/row-stats /.netlify/functions/row-stats 200
 /api/betting-ledger /.netlify/functions/betting-ledger 200
+/api/manual-odds /.netlify/functions/manual-odds 200
+/api/message /.netlify/functions/message 200
 /api/supabase-config /.netlify/functions/supabase-config 200
 /api/betting-auth /.netlify/functions/betting-auth 200
 /api/betting-users /.netlify/functions/betting-users 200

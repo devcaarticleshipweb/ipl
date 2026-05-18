@@ -336,26 +336,33 @@ function settleBet(payload) {
   try {
     const betId = String(payload.betId || "");
     const result = String(payload.result || "").toUpperCase();
+    const force = payload.force === true;
     const bets = readRows(SHEETS.bets, HEADERS.bets);
     const bet = bets.find((row) => String(row.id) === betId);
     if (!bet) return { statusCode: 404, error: "Bet not found." };
-    if (bet.status !== "PENDING") return { statusCode: 400, error: "Bet is already settled." };
+    if (bet.status !== "PENDING" && !force) return { statusCode: 400, error: "Bet is already settled." };
 
     const users = readRows(SHEETS.users, HEADERS.users);
     const user = users.find((row) => String(row.username).toLowerCase() === String(bet.username).toLowerCase());
     const stake = toNumber(bet.stake, 0);
     const liability = toNumber(bet.liability, stake);
     const profit = toNumber(bet.estimatedProfit, 0);
-    const balance = toNumber(user.balance, 0);
+    let pendingBalance = toNumber(user.balance, 0);
+
+    if (bet.status === "SETTLED") {
+      if (bet.result === "WIN") pendingBalance = Number((pendingBalance - liability - profit).toFixed(2));
+      else if (bet.result === "VOID") pendingBalance = Number((pendingBalance - liability).toFixed(2));
+    }
 
     if (result === "WIN") {
       bet.pnl = profit;
-      user.balance = Number((balance + liability + profit).toFixed(2));
+      user.balance = Number((pendingBalance + liability + profit).toFixed(2));
     } else if (result === "LOSE") {
       bet.pnl = -liability;
+      user.balance = pendingBalance;
     } else if (result === "VOID") {
       bet.pnl = 0;
-      user.balance = Number((balance + liability).toFixed(2));
+      user.balance = Number((pendingBalance + liability).toFixed(2));
     } else {
       return { statusCode: 400, error: "Result must be WIN, LOSE or VOID." };
     }

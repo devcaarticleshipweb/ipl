@@ -119,7 +119,7 @@ async function callSheetsApi(action, payload = {}) {
 async function handleSheetsBackedApi(req, res, action) {
   try {
     const payload = req.method === "GET" ? {} : await readJsonBody(req);
-    if (isSupabaseConfigured() && ["getLedger", "auth", "createUser", "adjustFunds", "presence", "placeBet", "settleBet"].includes(action)) {
+    if (isSupabaseConfigured() && ["getLedger", "auth", "createUser", "adjustFunds", "presence", "placeBet", "settleBet", "getManualOdds", "saveManualOdds", "getAppMessage", "saveAppMessage"].includes(action)) {
       const result = await runSupabaseAction(action, payload);
       sendJson(res, Number(result.statusCode || 200), result);
       return;
@@ -327,6 +327,7 @@ async function handleBets(req, res) {
       result: "",
       resultRun: "",
       pnl: 0,
+      oddsSource: body.oddsSource || "api",
       placedAt: new Date().toISOString()
     };
     ledger.bets.push(bet);
@@ -344,23 +345,31 @@ async function handleBetSettle(req, res) {
     const body = await readJsonBody(req);
     const result = String(body.result || "").toUpperCase();
     const resultRun = numericValue(body.resultRun);
+    const force = body.force === true;
     const ledger = loadBettingLedger();
     const bet = ledger.bets.find((row) => row.id === body.betId);
     if (!bet) return sendJson(res, 404, { error: "Bet not found." });
-    if (bet.status !== "PENDING") return sendJson(res, 400, { error: "Bet is already settled." });
+    if (bet.status !== "PENDING" && !force) return sendJson(res, 400, { error: "Bet is already settled." });
     const user = ledger.users.find((row) => String(row.username).toLowerCase() === String(bet.username).toLowerCase());
     const stake = numericValue(bet.stake) || 0;
     const liability = numericValue(bet.liability) || stake;
     const profit = numericValue(bet.estimatedProfit) || 0;
+    let pendingBalance = numericValue(user.balance) || 0;
+
+    if (bet.status === "SETTLED") {
+      if (bet.result === "WIN") pendingBalance = Number((pendingBalance - liability - profit).toFixed(2));
+      else if (bet.result === "VOID") pendingBalance = Number((pendingBalance - liability).toFixed(2));
+    }
 
     if (result === "WIN") {
       bet.pnl = profit;
-      user.balance = Number(((numericValue(user.balance) || 0) + liability + profit).toFixed(2));
+      user.balance = Number((pendingBalance + liability + profit).toFixed(2));
     } else if (result === "LOSE") {
       bet.pnl = -liability;
+      user.balance = pendingBalance;
     } else if (result === "VOID") {
       bet.pnl = 0;
-      user.balance = Number(((numericValue(user.balance) || 0) + liability).toFixed(2));
+      user.balance = Number((pendingBalance + liability).toFixed(2));
     } else {
       return sendJson(res, 400, { error: "Result must be WIN, LOSE or VOID." });
     }
@@ -624,6 +633,38 @@ const server = http.createServer((req, res) => {
 
   if (requestUrl.pathname === "/api/betting-ledger") {
     handleSheetsBackedApi(req, res, "getLedger");
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/manual-odds") {
+    const action = req.method === "GET" ? "getManualOdds" : "";
+    if (req.method === "GET") {
+      const eventId = requestUrl.searchParams.get("eventId") || "";
+      if (isSupabaseConfigured()) {
+        runSupabaseAction(action, { eventId })
+          .then((result) => sendJson(res, Number(result.statusCode || 200), result))
+          .catch((error) => sendJson(res, 502, { error: "Unable to load manual odds.", detail: error.message }));
+      } else {
+        sendJson(res, 500, { error: "Supabase is required for manual odds." });
+      }
+      return;
+    }
+    handleSheetsBackedApi(req, res, "saveManualOdds");
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/message") {
+    if (req.method === "GET") {
+      if (isSupabaseConfigured()) {
+        runSupabaseAction("getAppMessage", {})
+          .then((result) => sendJson(res, Number(result.statusCode || 200), result))
+          .catch((error) => sendJson(res, 502, { error: "Unable to load message.", detail: error.message }));
+      } else {
+        sendJson(res, 500, { error: "Supabase is required for messages." });
+      }
+      return;
+    }
+    handleSheetsBackedApi(req, res, "saveAppMessage");
     return;
   }
 
