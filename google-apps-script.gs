@@ -160,7 +160,8 @@ function bookmakerGroupExposure(bets) {
   });
   const runnerKeys = Object.keys(runnerMap);
   if (runnerKeys.length === 0) return 0;
-  const positions = runnerKeys.map((runnerKey) => bets.reduce((sum, bet) => {
+  const outcomeKeys = runnerKeys.concat(["__OTHER_RUNNER__"]);
+  const positions = outcomeKeys.map((runnerKey) => bets.reduce((sum, bet) => {
     const stake = toNumber(bet.stake, 0);
     const profit = toNumber(bet.estimatedProfit, betProfit(stake, toNumber(bet.odds, 0)));
     const liability = toNumber(bet.liability, profit);

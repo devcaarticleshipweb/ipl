@@ -418,8 +418,9 @@ function Get-BookmakerGroupExposure {
   param($Bets)
   $RunnerKeys = @($Bets | ForEach-Object { $_.marketKey } | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Sort-Object -Unique)
   if ($RunnerKeys.Count -eq 0) { return 0 }
+  $OutcomeKeys = @($RunnerKeys + "__OTHER_RUNNER__")
   $Worst = 0
-  foreach ($RunnerKey in $RunnerKeys) {
+  foreach ($RunnerKey in $OutcomeKeys) {
     $Position = 0
     foreach ($Bet in $Bets) {
       $Stake = Get-NumericValue -Value $Bet.stake

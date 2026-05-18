@@ -161,7 +161,8 @@ function fancyGroupExposure(bets) {
 function bookmakerGroupExposure(bets) {
   const runnerKeys = [...new Set(bets.map((bet) => bet.marketKey).filter(Boolean))];
   if (!runnerKeys.length) return 0;
-  const positions = runnerKeys.map((runnerKey) => bets.reduce((sum, bet) => {
+  const outcomeKeys = [...runnerKeys, "__OTHER_RUNNER__"];
+  const positions = outcomeKeys.map((runnerKey) => bets.reduce((sum, bet) => {
     const stake = toNumber(bet.stake, 0);
     const profit = toNumber(bet.estimatedProfit, betProfit(stake, bet.odds));
     const liability = toNumber(bet.liability, profit);
