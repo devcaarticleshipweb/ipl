@@ -1907,7 +1907,7 @@ function bookmakerRateAmount(stake, odds) {
   const stakeValue = Number(stake);
   const oddsValue = Number(odds);
   if (!Number.isFinite(stakeValue) || !Number.isFinite(oddsValue)) return 0;
-  return Number((oddsValue > 20 ? (stakeValue * oddsValue) / 100 : stakeValue * Math.max(0, oddsValue - 1)).toFixed(2));
+  return Number(((stakeValue * oddsValue) / 100).toFixed(2));
 }
 
 function betRunValue(bet) {
@@ -2990,7 +2990,6 @@ function createBettingPanel() {
   const performanceRows = isMaster ? userSummaryRowsForMaster() : [];
   const myBets = (bettingLedger.bets || [])
     .filter((bet) => isMaster || String(bet.username).toLowerCase() === String(session.username).toLowerCase())
-    .slice(-10)
     .reverse();
 
   section.innerHTML = `
@@ -3051,7 +3050,7 @@ function createBettingPanel() {
       </div>
     ` : ""}
     <div class="ledger-table-wrap">
-      <h3>${isMaster ? "Recent Bets" : "My Bets"}</h3>
+      <h3>${isMaster ? "All Bets" : "My Bets"} (${myBets.length})</h3>
       <table class="ledger-table">
         <thead><tr>${isMaster ? "<th>User</th>" : ""}<th>Match</th><th>Market</th><th>Side</th><th>Run</th><th>Rate</th><th>Stake</th><th>Result</th><th>Status</th><th>P&L</th>${isMaster ? "<th>Settle</th>" : ""}</tr></thead>
         <tbody>
@@ -3113,7 +3112,9 @@ function renderPayload(payload, preparedRows = null) {
   const rows = preparedRows || applyManualOverrides(buildOddsRows(payload.data));
   window.__fair91LastRows = rows;
   const bookmakerRows = rows.filter((row) => row.marketType === "BOOKMAKER");
-  const fancyRows = rows.filter((row) => row.marketType === "FANCY");
+  const fancyRows = rows
+    .filter((row) => row.marketType === "FANCY")
+    .sort((a, b) => Number(hasFancyLadder(b)) - Number(hasFancyLadder(a)));
 
   const fragment = document.createDocumentFragment();
   renderAccountBar();

@@ -333,10 +333,7 @@ function Get-BetProfit {
     [double]$Odds
   )
 
-  if ($Odds -gt 20) {
-    return [Math]::Round(($Stake * $Odds / 100), 2)
-  }
-  return [Math]::Round(($Stake * [Math]::Max(0, $Odds - 1)), 2)
+  return [Math]::Round(($Stake * $Odds / 100), 2)
 }
 
 function Get-FancyRateAmount {
@@ -374,6 +371,95 @@ function Get-FancyProfit {
   return $Stake
 }
 
+function Get-BetRunValue {
+  param($Bet)
+  $Run = Get-NumericValue -Value $Bet.run
+  if ($null -ne $Run) { return $Run }
+  $Target = Get-NumericValue -Value $Bet.target
+  if ($null -ne $Target) { return $Target }
+  return Get-NumericValue -Value $Bet.odds
+}
+
+function Get-FancyBetPnlAtResult {
+  param($Bet, [double]$Result)
+  $Stake = Get-NumericValue -Value $Bet.stake
+  $Target = Get-BetRunValue -Bet $Bet
+  $Rate = Get-NumericValue -Value $Bet.rate
+  if ($null -eq $Stake) { $Stake = 0 }
+  if ($null -eq $Rate) { $Rate = 100 }
+  if ($null -eq $Target) { return 0 }
+  $Liability = Get-FancyLiability -Stake $Stake -Rate $Rate -Side $Bet.side
+  $Profit = Get-FancyProfit -Stake $Stake -Rate $Rate -Side $Bet.side
+  if ($Bet.side -eq "Yes") {
+    if ($Result -ge $Target) { return $Profit }
+    return -1 * $Liability
+  }
+  if ($Bet.side -eq "No") {
+    if ($Result -lt $Target) { return $Profit }
+    return -1 * $Liability
+  }
+  return 0
+}
+
+function Get-FancyGroupExposure {
+  param($Bets)
+  $Targets = @($Bets | ForEach-Object { Get-BetRunValue -Bet $_ } | Where-Object { $null -ne $_ } | Sort-Object -Unique)
+  if ($Targets.Count -eq 0) { return 0 }
+  $Worst = 0
+  foreach ($Result in @(0) + $Targets) {
+    $Pnl = 0
+    foreach ($Bet in $Bets) { $Pnl += Get-FancyBetPnlAtResult -Bet $Bet -Result $Result }
+    if ($Pnl -lt $Worst) { $Worst = $Pnl }
+  }
+  return [Math]::Max(0, -1 * $Worst)
+}
+
+function Get-BookmakerGroupExposure {
+  param($Bets)
+  $RunnerKeys = @($Bets | ForEach-Object { $_.marketKey } | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Sort-Object -Unique)
+  if ($RunnerKeys.Count -eq 0) { return 0 }
+  $Worst = 0
+  foreach ($RunnerKey in $RunnerKeys) {
+    $Position = 0
+    foreach ($Bet in $Bets) {
+      $Stake = Get-NumericValue -Value $Bet.stake
+      $Odds = Get-NumericValue -Value $Bet.odds
+      $Profit = Get-NumericValue -Value $Bet.estimatedProfit
+      $Liability = Get-NumericValue -Value $Bet.liability
+      if ($null -eq $Stake) { $Stake = 0 }
+      if ($null -eq $Odds) { $Odds = 0 }
+      if ($null -eq $Profit) { $Profit = Get-BetProfit -Stake $Stake -Odds $Odds }
+      if ($null -eq $Liability) { $Liability = $Profit }
+      $Selected = [string]$Bet.marketKey -eq [string]$RunnerKey
+      if ($Bet.side -eq "Back") {
+        $Position += if ($Selected) { $Profit } else { -1 * $Stake }
+      } elseif ($Bet.side -eq "Lay") {
+        $Position += if ($Selected) { -1 * $Liability } else { $Stake }
+      }
+    }
+    if ($Position -lt $Worst) { $Worst = $Position }
+  }
+  return [Math]::Max(0, -1 * $Worst)
+}
+
+function Get-ExposureForPendingBets {
+  param($Pending)
+  $Groups = @{}
+  foreach ($Bet in $Pending) {
+    $GroupKey = if ($Bet.marketType -eq "BOOKMAKER") { "$($Bet.eventId)::BOOKMAKER::BOOKMAKER" } else { "$($Bet.eventId)::$($Bet.marketType)::$($Bet.marketKey)" }
+    if (-not $Groups.ContainsKey($GroupKey)) { $Groups[$GroupKey] = @() }
+    $Groups[$GroupKey] = @($Groups[$GroupKey] + $Bet)
+  }
+  $Exposure = 0
+  foreach ($Key in $Groups.Keys) {
+    $GroupBets = @($Groups[$Key])
+    if ($GroupBets[0].marketType -eq "FANCY") { $Exposure += Get-FancyGroupExposure -Bets $GroupBets }
+    elseif ($GroupBets[0].marketType -eq "BOOKMAKER") { $Exposure += Get-BookmakerGroupExposure -Bets $GroupBets }
+    else { foreach ($Bet in $GroupBets) { $Exposure += (Get-NumericValue -Value $Bet.liability) } }
+  }
+  return [Math]::Round($Exposure, 2)
+}
+
 function Get-PublicLedger {
   param([hashtable]$Ledger)
 
@@ -387,7 +473,7 @@ function Get-PublicLedger {
     $Pending = @($UserBets | Where-Object { $_.status -eq "PENDING" })
     $Settled = @($UserBets | Where-Object { $_.status -eq "SETTLED" })
     $TotalStake = ($UserBets | Measure-Object -Property stake -Sum).Sum
-    $Exposure = ($Pending | Measure-Object -Property stake -Sum).Sum
+    $Exposure = Get-ExposureForPendingBets -Pending $Pending
     $Pnl = ($Settled | Measure-Object -Property pnl -Sum).Sum
 
     $Summary += [ordered]@{

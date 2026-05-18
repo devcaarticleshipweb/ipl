@@ -21,7 +21,7 @@ function money(value) {
 }
 
 function betProfit(stake, odds) {
-  return Number((odds > 20 ? (stake * odds) / 100 : stake * Math.max(0, odds - 1)).toFixed(2));
+  return Number(((stake * odds) / 100).toFixed(2));
 }
 
 function fancyRateAmount(stake, rate) {
@@ -125,6 +125,66 @@ function appMessage(row) {
   };
 }
 
+function betRunValue(bet) {
+  return toNumber(bet.run || bet.target || bet.odds, null);
+}
+
+function fancyBetPnlAtResult(bet, result) {
+  const stake = toNumber(bet.stake, 0);
+  const target = betRunValue(bet);
+  const rate = toNumber(bet.rate, 100);
+  if (target === null) return 0;
+  const liability = fancyLiability(stake, rate, bet.side);
+  const profit = fancyProfit(stake, rate, bet.side);
+  if (bet.side === "Yes") return result >= target ? profit : -liability;
+  if (bet.side === "No") return result < target ? profit : -liability;
+  return 0;
+}
+
+function groupBy(items, keyFn) {
+  return items.reduce((groups, item) => {
+    const key = keyFn(item);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+    return groups;
+  }, new Map());
+}
+
+function fancyGroupExposure(bets) {
+  const targets = [...new Set(bets.map(betRunValue).filter((value) => value !== null))].sort((a, b) => a - b);
+  if (!targets.length) return 0;
+  const testResults = [0, ...targets];
+  const worst = Math.min(...testResults.map((result) => bets.reduce((sum, bet) => sum + fancyBetPnlAtResult(bet, result), 0)));
+  return Math.max(0, -worst);
+}
+
+function bookmakerGroupExposure(bets) {
+  const runnerKeys = [...new Set(bets.map((bet) => bet.marketKey).filter(Boolean))];
+  if (!runnerKeys.length) return 0;
+  const positions = runnerKeys.map((runnerKey) => bets.reduce((sum, bet) => {
+    const stake = toNumber(bet.stake, 0);
+    const profit = toNumber(bet.estimatedProfit, betProfit(stake, bet.odds));
+    const liability = toNumber(bet.liability, profit);
+    const selected = bet.marketKey === runnerKey;
+    if (bet.side === "Back") return sum + (selected ? profit : -stake);
+    if (bet.side === "Lay") return sum + (selected ? -liability : stake);
+    return sum;
+  }, 0));
+  const worst = Math.min(...positions);
+  return Math.max(0, -worst);
+}
+
+function exposureForPendingBets(pendingBets) {
+  const groups = groupBy(pendingBets, (bet) => `${bet.eventId || ""}::${bet.marketType || ""}::${bet.marketType === "BOOKMAKER" ? "BOOKMAKER" : bet.marketKey || bet.marketName || ""}`);
+  let exposure = 0;
+  groups.forEach((bets) => {
+    if (bets[0]?.marketType === "FANCY") exposure += fancyGroupExposure(bets);
+    else if (bets[0]?.marketType === "BOOKMAKER") exposure += bookmakerGroupExposure(bets);
+    else exposure += bets.reduce((sum, bet) => sum + toNumber(bet.liability || bet.stake, 0), 0);
+  });
+  return money(exposure);
+}
+
 function publicLedger(users, bets) {
   const appUsers = users.map(appUser);
   const appBets = bets.map(appBet);
@@ -137,7 +197,7 @@ function publicLedger(users, bets) {
       name: user.name,
       balance: toNumber(user.balance, 0),
       totalStake: userBets.reduce((sum, bet) => sum + toNumber(bet.stake, 0), 0),
-      exposure: pending.reduce((sum, bet) => sum + toNumber(bet.liability || bet.stake, 0), 0),
+      exposure: exposureForPendingBets(pending),
       pnl: settled.reduce((sum, bet) => sum + toNumber(bet.pnl, 0), 0),
       betCount: userBets.length,
       lastLoginAt: user.lastLoginAt,

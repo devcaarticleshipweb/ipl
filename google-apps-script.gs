@@ -97,7 +97,7 @@ function toNumber(value, fallback) {
 }
 
 function betProfit(stake, odds) {
-  return Number((odds > 20 ? (stake * odds) / 100 : stake * Math.max(0, odds - 1)).toFixed(2));
+  return Number(((stake * odds) / 100).toFixed(2));
 }
 
 function fancyRateAmount(stake, rate) {
@@ -110,6 +110,76 @@ function fancyLiability(stake, rate, side) {
 
 function fancyProfit(stake, rate, side) {
   return side === "Yes" ? fancyRateAmount(stake, rate) : stake;
+}
+
+function betRunValue(bet) {
+  const run = toNumber(bet.run, null);
+  if (run !== null) return run;
+  const target = toNumber(bet.target, null);
+  if (target !== null) return target;
+  return toNumber(bet.odds, null);
+}
+
+function fancyBetPnlAtResult(bet, result) {
+  const stake = toNumber(bet.stake, 0);
+  const target = betRunValue(bet);
+  const rate = toNumber(bet.rate, 100);
+  if (target === null) return 0;
+  const liability = fancyLiability(stake, rate, bet.side);
+  const profit = fancyProfit(stake, rate, bet.side);
+  if (bet.side === "Yes") return result >= target ? profit : -liability;
+  if (bet.side === "No") return result < target ? profit : -liability;
+  return 0;
+}
+
+function groupBy(items, keyFn) {
+  return items.reduce((groups, item) => {
+    const key = keyFn(item);
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(item);
+    return groups;
+  }, {});
+}
+
+function fancyGroupExposure(bets) {
+  const targetMap = {};
+  bets.forEach((bet) => {
+    const target = betRunValue(bet);
+    if (target !== null) targetMap[target] = true;
+  });
+  const targets = Object.keys(targetMap).map(Number).sort((a, b) => a - b);
+  if (targets.length === 0) return 0;
+  const pnls = [0].concat(targets).map((result) => bets.reduce((sum, bet) => sum + fancyBetPnlAtResult(bet, result), 0));
+  return Math.max(0, -Math.min.apply(null, pnls));
+}
+
+function bookmakerGroupExposure(bets) {
+  const runnerMap = {};
+  bets.forEach((bet) => {
+    if (bet.marketKey) runnerMap[bet.marketKey] = true;
+  });
+  const runnerKeys = Object.keys(runnerMap);
+  if (runnerKeys.length === 0) return 0;
+  const positions = runnerKeys.map((runnerKey) => bets.reduce((sum, bet) => {
+    const stake = toNumber(bet.stake, 0);
+    const profit = toNumber(bet.estimatedProfit, betProfit(stake, toNumber(bet.odds, 0)));
+    const liability = toNumber(bet.liability, profit);
+    const selected = bet.marketKey === runnerKey;
+    if (bet.side === "Back") return sum + (selected ? profit : -stake);
+    if (bet.side === "Lay") return sum + (selected ? -liability : stake);
+    return sum;
+  }, 0));
+  return Math.max(0, -Math.min.apply(null, positions));
+}
+
+function exposureForPendingBets(pendingBets) {
+  const groups = groupBy(pendingBets, (bet) => `${bet.eventId || ""}::${bet.marketType || ""}::${bet.marketType === "BOOKMAKER" ? "BOOKMAKER" : bet.marketKey || bet.marketName || ""}`);
+  return Number(Object.keys(groups).reduce((sum, key) => {
+    const bets = groups[key];
+    if (bets[0] && bets[0].marketType === "FANCY") return sum + fancyGroupExposure(bets);
+    if (bets[0] && bets[0].marketType === "BOOKMAKER") return sum + bookmakerGroupExposure(bets);
+    return sum + bets.reduce((inner, bet) => inner + toNumber(bet.liability || bet.stake, 0), 0);
+  }, 0).toFixed(2));
 }
 
 function updateRowStats(payload) {
@@ -170,7 +240,7 @@ function publicLedger() {
       name: user.name,
       balance: toNumber(user.balance, 0),
       totalStake: userBets.reduce((sum, bet) => sum + toNumber(bet.stake, 0), 0),
-      exposure: pending.reduce((sum, bet) => sum + toNumber(bet.stake, 0), 0),
+      exposure: exposureForPendingBets(pending),
       pnl: settled.reduce((sum, bet) => sum + toNumber(bet.pnl, 0), 0),
       betCount: userBets.length,
       lastLoginAt: user.lastLoginAt,
