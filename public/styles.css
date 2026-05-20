@@ -229,6 +229,7 @@ input {
 .summary,
 .market-section,
 .live-score-section,
+.crex-embed-section,
 .betting-panel,
 .raw-panel,
 .empty-state,
@@ -241,6 +242,46 @@ input {
 
 .cricket-score {
   background: #101923;
+}
+
+.crex-embed-section {
+  background: #101923;
+}
+
+.crex-embed-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  color: #f5d271;
+  border-bottom: 1px solid #23303d;
+}
+
+.crex-embed-head a {
+  border: 1px solid rgba(224, 190, 116, 0.42);
+  border-radius: 7px;
+  padding: 7px 10px;
+  color: #151515;
+  background: linear-gradient(130deg, #e4c57f, var(--gold));
+  font-size: 0.8rem;
+  font-weight: 900;
+  text-decoration: none;
+}
+
+.crex-embed-frame {
+  display: block;
+  width: 100%;
+  height: min(720px, 72vh);
+  border: 0;
+  background: #0c1118;
+}
+
+.crex-embed-note {
+  padding: 9px 14px;
+  color: var(--muted);
+  border-top: 1px solid #23303d;
+  font-size: 0.82rem;
 }
 
 .score-title {
@@ -1770,6 +1811,10 @@ pre {
   .over-strip {
     padding-left: 14px;
     padding-right: 14px;
+  }
+
+  .crex-embed-frame {
+    height: min(620px, 70vh);
   }
 
   .score-title {

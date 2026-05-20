@@ -201,7 +201,7 @@ function fancyGroupExposure(bets) {
 function bookmakerGroupExposure(bets) {
   const runnerKeys = [...new Set(bets.map((bet) => bet.marketKey).filter(Boolean))];
   if (!runnerKeys.length) return 0;
-  const outcomeKeys = [...runnerKeys, "__OTHER_RUNNER__"];
+  const outcomeKeys = runnerKeys.length === 1 ? [...runnerKeys, "__OTHER_RUNNER__"] : runnerKeys;
   const positions = outcomeKeys.map((runnerKey) => bets.reduce((sum, bet) => {
     const stake = numericValue(bet.stake) || 0;
     const profit = numericValue(bet.estimatedProfit) ?? betProfit(stake, numericValue(bet.odds) || 0);
@@ -230,12 +230,13 @@ function publicLedger(ledger) {
     const userBets = ledger.bets.filter((bet) => String(bet.username).toLowerCase() === String(user.username).toLowerCase());
     const pending = userBets.filter((bet) => bet.status === "PENDING");
     const settled = userBets.filter((bet) => bet.status === "SETTLED");
+    const storedExposure = numericValue(user.exposure);
     return {
       username: user.username,
       name: user.name,
       balance: numericValue(user.balance) || 0,
       totalStake: userBets.reduce((sum, bet) => sum + (numericValue(bet.stake) || 0), 0),
-      exposure: exposureForPendingBets(pending),
+      exposure: storedExposure === null ? exposureForPendingBets(pending) : storedExposure,
       pnl: settled.reduce((sum, bet) => sum + (numericValue(bet.pnl) || 0), 0),
       betCount: userBets.length
     };
@@ -246,6 +247,14 @@ function publicLedger(ledger) {
     bets: ledger.bets,
     summary
   };
+}
+
+function refreshUserExposure(ledger, username) {
+  const user = ledger.users.find((row) => String(row.username).toLowerCase() === String(username).toLowerCase());
+  if (!user) return 0;
+  const pending = ledger.bets.filter((bet) => String(bet.username).toLowerCase() === String(username).toLowerCase() && bet.status === "PENDING");
+  user.exposure = exposureForPendingBets(pending);
+  return user.exposure;
 }
 
 async function handleRowStats(req, res) {
@@ -331,7 +340,7 @@ async function handleBettingUsers(req, res) {
       return sendJson(res, 409, { error: "User already exists." });
     }
 
-    const user = { username, password, name, role: "user", balance, createdAt: new Date().toISOString() };
+    const user = { username, password, name, role: "user", balance, exposure: 0, createdAt: new Date().toISOString() };
     ledger.users.push(user);
     saveBettingLedger(ledger);
     const { password: _password, ...safeUser } = user;
@@ -390,6 +399,7 @@ async function handleBets(req, res) {
       placedAt: new Date().toISOString()
     };
     ledger.bets.push(bet);
+    refreshUserExposure(ledger, username);
     saveBettingLedger(ledger);
     sendJson(res, 200, { bet, ledger: publicLedger(ledger) });
   } catch (error) {
@@ -437,6 +447,7 @@ async function handleBetSettle(req, res) {
     bet.result = result;
     bet.resultRun = resultRun ?? "";
     bet.settledAt = new Date().toISOString();
+    refreshUserExposure(ledger, bet.username);
     saveBettingLedger(ledger);
     sendJson(res, 200, { bet, ledger: publicLedger(ledger) });
   } catch (error) {

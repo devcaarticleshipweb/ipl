@@ -6,6 +6,7 @@ create table if not exists public.users (
   name text,
   role text not null default 'user',
   balance numeric not null default 0,
+  exposure numeric not null default 0,
   last_login_at timestamptz,
   last_seen_at timestamptz,
   is_online boolean not null default false,
@@ -74,6 +75,7 @@ add column if not exists result_run numeric,
 add column if not exists odds_source text;
 
 alter table public.users
+add column if not exists exposure numeric not null default 0,
 add column if not exists last_login_at timestamptz,
 add column if not exists last_seen_at timestamptz,
 add column if not exists is_online boolean not null default false;

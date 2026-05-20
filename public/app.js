@@ -21,6 +21,7 @@ const ONLINE_WINDOW_MS = 45000;
 const ENABLE_BACKGROUND_SHEETS_SYNC = false;
 const SESSION_KEY = "fair91.auth";
 const SELECTED_EVENT_KEY = "fair91.selectedEventId";
+const DEFAULT_CREX_KKR_MI_URL = "https://crex.com/cricket-live-score/kkr-vs-mi-65th-match-indian-premier-league-2026-match-updates-119A";
 
 let refreshTimer = null;
 let liveScoreRefreshTimer = null;
@@ -206,6 +207,7 @@ function normalizeEvents(rows) {
       name: getFieldValue(row, ["event_name", "eventname", "name", "title", "match"]),
       scoreKey: getFieldValue(row, ["score_key", "scorekey", "live_score_key", "livescorekey", "key", "score"]),
       cricbuzzMatchId: getFieldValue(row, ["cricbuzz_match_id", "cricbuzzmatchid", "cricbuzz_id", "cricbuzzid", "match_id", "matchid"]),
+      crexUrl: getFieldValue(row, ["crex_url", "crexurl", "live_score_url", "livescoreurl", "score_url", "scoreurl"]),
       team1Short: getFieldValue(row, ["team1_short", "team1short", "team_1_short", "team 1 short", "team 1 short name", "team1_short_name", "team1shortname", "team1", "team_1", "team 1"]),
       team2Short: getFieldValue(row, ["team2_short", "team2short", "team_2_short", "team 2 short", "team 2 short name", "team2_short_name", "team2shortname", "team2", "team_2", "team 2"])
     }))
@@ -245,6 +247,31 @@ function selectedEventConfig() {
 
 function hasLiveScoreConfig() {
   return Boolean(String(selectedEventConfig()?.scoreKey || "").trim());
+}
+
+function crexScoreUrl() {
+  const selected = selectedEventConfig();
+  const explicitUrl = String(selected?.crexUrl || "").trim();
+  if (explicitUrl) return explicitUrl;
+  const haystack = `${selectedEventName || ""} ${selected?.name || ""}`.toLowerCase();
+  if ((haystack.includes("kkr") || haystack.includes("kolkata")) && (haystack.includes("mi") || haystack.includes("mumbai"))) {
+    return DEFAULT_CREX_KKR_MI_URL;
+  }
+  return "";
+}
+
+function createCrexEmbedSection(url) {
+  const section = document.createElement("section");
+  section.className = "crex-embed-section";
+  section.innerHTML = `
+    <div class="crex-embed-head">
+      <strong>Crex Live Score</strong>
+      <a href="${url}" target="_blank" rel="noopener noreferrer">Open</a>
+    </div>
+    <iframe class="crex-embed-frame" src="${url}" title="Crex live score" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
+    <div class="crex-embed-note">If the live score does not load here, use the Open button.</div>
+  `;
+  return section;
 }
 
 async function fetchSheetConfig() {
@@ -2718,7 +2745,6 @@ function formatDateTime(value) {
 }
 
 function isUserOnline(user) {
-  if (user?.isOnline === true || user?.isOnline === "true" || user?.isOnline === "1" || user?.isOnline === 1) return true;
   const lastSeen = new Date(user?.lastSeenAt || 0).getTime();
   if (!lastSeen) return false;
   return (Date.now() - lastSeen) <= ONLINE_WINDOW_MS;
@@ -2768,7 +2794,7 @@ function accountMetrics() {
     username: session.username,
     displayName: ledgerUser.name || session.name || session.username,
     balance: ledgerUser.balance ?? summary.balance ?? 0,
-    exposure: summary.exposure ?? 0,
+    exposure: ledgerUser.exposure ?? summary.exposure ?? 0,
     pnl: summary.pnl || 0
   };
 }
@@ -3015,18 +3041,6 @@ function createBettingPanel() {
           <table class="ledger-table">
             <thead><tr><th>User</th><th>Online</th><th>Last Login</th><th>Last Seen</th><th>Balance</th><th>Stake</th><th>Exposure</th><th>P/L</th><th>Bets</th><th>Funds</th></tr></thead>
             <tbody>
-              <tr>
-                <td><strong>MASTER BOOK</strong></td>
-                <td>-</td>
-                <td>-</td>
-                <td>-</td>
-                <td>${displayMoney(masterSummary.balance)}</td>
-                <td>${displayMoney(masterSummary.totalStake)}</td>
-                <td>${displayMoney(masterSummary.exposure)}</td>
-                <td class="${Number(masterSummary.pnl || 0) < 0 ? "loss" : "profit"}">${displayMoney(masterSummary.pnl)}</td>
-                <td>${simpleValue(masterSummary.betCount)}</td>
-                <td>-</td>
-              </tr>
               ${performanceRows.map((row) => `
                 <tr>
                   <td>${simpleValue(row.username)}</td>
@@ -3052,7 +3066,7 @@ function createBettingPanel() {
     <div class="ledger-table-wrap">
       <h3>${isMaster ? "All Bets" : "My Bets"} (${myBets.length})</h3>
       <table class="ledger-table">
-        <thead><tr>${isMaster ? "<th>User</th>" : ""}<th>Match</th><th>Market</th><th>Side</th><th>Run</th><th>Rate</th><th>Stake</th><th>Result</th><th>Status</th><th>P&L</th>${isMaster ? "<th>Settle</th>" : ""}</tr></thead>
+        <thead><tr>${isMaster ? "<th>User</th>" : ""}<th>Match</th><th>Market</th><th>Side</th><th>Run</th><th>Rate</th><th>Stake</th>${isMaster ? "<th>Created</th><th>Settled</th>" : ""}<th>Result</th><th>Status</th><th>P&L</th>${isMaster ? "<th>Settle</th>" : ""}</tr></thead>
         <tbody>
           ${myBets.map((bet) => `
             <tr>
@@ -3063,6 +3077,7 @@ function createBettingPanel() {
               <td>${betRunDisplay(bet)}</td>
               <td>${betRateDisplay(bet)}</td>
               <td>${displayMoney(bet.stake)}</td>
+              ${isMaster ? `<td>${formatDateTime(bet.placedAt)}</td><td>${formatDateTime(bet.settledAt)}</td>` : ""}
               <td>${betResultRunDisplay(bet)}</td>
               <td>${simpleValue(betStatusValue(bet))}</td>
               <td>${betPnlDisplay(bet, isMaster)}</td>
@@ -3077,7 +3092,7 @@ function createBettingPanel() {
                 `}
               </td>` : ""}
             </tr>
-          `).join("") || `<tr><td colspan="${isMaster ? 11 : 9}">No bets placed yet.</td></tr>`}
+          `).join("") || `<tr><td colspan="${isMaster ? 13 : 9}">No bets placed yet.</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -3119,6 +3134,8 @@ function renderPayload(payload, preparedRows = null) {
   const fragment = document.createDocumentFragment();
   renderAccountBar();
   if (hasLiveScoreConfig()) fragment.append(createLiveScoreSection());
+  const crexUrl = crexScoreUrl();
+  if (crexUrl) fragment.append(createCrexEmbedSection(crexUrl));
 
   if (bookmakerRows.length) fragment.append(createMarketSection("Bookmaker", ["Bookmaker", "Back", "Lay"], bookmakerRows, false));
   if (fancyRows.length) fragment.append(createMarketSection("Fancy", ["Bookmaker", "No", "Yes"], fancyRows, true));

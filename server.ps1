@@ -418,7 +418,7 @@ function Get-BookmakerGroupExposure {
   param($Bets)
   $RunnerKeys = @($Bets | ForEach-Object { $_.marketKey } | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Sort-Object -Unique)
   if ($RunnerKeys.Count -eq 0) { return 0 }
-  $OutcomeKeys = @($RunnerKeys + "__OTHER_RUNNER__")
+  $OutcomeKeys = if ($RunnerKeys.Count -eq 1) { @($RunnerKeys + "__OTHER_RUNNER__") } else { $RunnerKeys }
   $Worst = 0
   foreach ($RunnerKey in $OutcomeKeys) {
     $Position = 0
@@ -474,7 +474,8 @@ function Get-PublicLedger {
     $Pending = @($UserBets | Where-Object { $_.status -eq "PENDING" })
     $Settled = @($UserBets | Where-Object { $_.status -eq "SETTLED" })
     $TotalStake = ($UserBets | Measure-Object -Property stake -Sum).Sum
-    $Exposure = Get-ExposureForPendingBets -Pending $Pending
+    $StoredExposure = Get-NumericValue -Value $User.exposure
+    $Exposure = if ($null -eq $StoredExposure) { Get-ExposureForPendingBets -Pending $Pending } else { $StoredExposure }
     $Pnl = ($Settled | Measure-Object -Property pnl -Sum).Sum
 
     $Summary += [ordered]@{
@@ -494,6 +495,7 @@ function Get-PublicLedger {
       name = $_.name
       role = $_.role
       balance = $_.balance
+      exposure = $_.exposure
       createdAt = $_.createdAt
     }
   })
@@ -503,6 +505,18 @@ function Get-PublicLedger {
     bets = $Bets
     summary = $Summary
   }
+}
+
+function Update-UserExposure {
+  param([hashtable]$Ledger, [string]$Username)
+  $Users = @($Ledger["users"])
+  $Bets = @($Ledger["bets"])
+  $User = @($Users | Where-Object { ([string]$_.username).ToLowerInvariant() -eq $Username.ToLowerInvariant() } | Select-Object -First 1)
+  if ($User.Count -eq 0) { return 0 }
+  $Pending = @($Bets | Where-Object { ([string]$_.username).ToLowerInvariant() -eq $Username.ToLowerInvariant() -and $_.status -eq "PENDING" })
+  $Exposure = Get-ExposureForPendingBets -Pending $Pending
+  $User[0].exposure = $Exposure
+  return $Exposure
 }
 
 function Handle-BettingLedgerApi {
@@ -552,6 +566,7 @@ function Handle-BettingUsersApi {
       name = $Name
       role = "user"
       balance = $Balance
+      exposure = 0
       createdAt = (Get-Date).ToUniversalTime().ToString("o")
     }
     $Ledger["users"] = @($Users + $User)
@@ -683,6 +698,7 @@ function Handle-BetsApi {
       placedAt = (Get-Date).ToUniversalTime().ToString("o")
     }
     $Ledger["bets"] = @(@($Ledger["bets"]) + $Bet)
+    Update-UserExposure -Ledger $Ledger -Username $Username | Out-Null
     Save-BettingLedger -Ledger $Ledger
 
     Write-Json -Response $Response -StatusCode 200 -Payload @{ bet = $Bet; ledger = (Get-PublicLedger -Ledger $Ledger) }
@@ -758,6 +774,7 @@ function Handle-BetSettleApi {
     $Bet.result = $Result
     $Bet.resultRun = if ($null -eq $ResultRun) { "" } else { $ResultRun }
     $Bet.settledAt = (Get-Date).ToUniversalTime().ToString("o")
+    Update-UserExposure -Ledger $Ledger -Username $Bet.username | Out-Null
     Save-BettingLedger -Ledger $Ledger
     Write-Json -Response $Response -StatusCode 200 -Payload @{ bet = $Bet; ledger = (Get-PublicLedger -Ledger $Ledger) }
   } catch {

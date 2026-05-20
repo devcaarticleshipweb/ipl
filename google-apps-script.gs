@@ -7,7 +7,7 @@ const SHEETS = {
 
 const HEADERS = {
   login: ["username", "password", "name", "role"],
-  users: ["username", "password", "name", "role", "balance", "createdAt", "lastLoginAt", "lastSeenAt", "isOnline"],
+  users: ["username", "password", "name", "role", "balance", "exposure", "createdAt", "lastLoginAt", "lastSeenAt", "isOnline"],
   bets: ["id", "username", "eventId", "eventName", "marketKey", "marketName", "marketType", "side", "odds", "run", "target", "rate", "stake", "liability", "estimatedProfit", "status", "result", "resultRun", "pnl", "placedAt", "settledAt", "statusAtSelection", "verifiedAt"],
   rowStats: ["eventId", "rowKey", "min", "max", "updatedAt"]
 };
@@ -160,7 +160,7 @@ function bookmakerGroupExposure(bets) {
   });
   const runnerKeys = Object.keys(runnerMap);
   if (runnerKeys.length === 0) return 0;
-  const outcomeKeys = runnerKeys.concat(["__OTHER_RUNNER__"]);
+  const outcomeKeys = runnerKeys.length === 1 ? runnerKeys.concat(["__OTHER_RUNNER__"]) : runnerKeys;
   const positions = outcomeKeys.map((runnerKey) => bets.reduce((sum, bet) => {
     const stake = toNumber(bet.stake, 0);
     const profit = toNumber(bet.estimatedProfit, betProfit(stake, toNumber(bet.odds, 0)));
@@ -181,6 +181,15 @@ function exposureForPendingBets(pendingBets) {
     if (bets[0] && bets[0].marketType === "BOOKMAKER") return sum + bookmakerGroupExposure(bets);
     return sum + bets.reduce((inner, bet) => inner + toNumber(bet.liability || bet.stake, 0), 0);
   }, 0).toFixed(2));
+}
+
+function refreshUserExposure(users, bets, username) {
+  const user = users.find((row) => String(row.username).toLowerCase() === String(username).toLowerCase());
+  if (!user) return 0;
+  const pending = bets.filter((bet) => String(bet.username).toLowerCase() === String(username).toLowerCase() && bet.status === "PENDING");
+  user.exposure = exposureForPendingBets(pending);
+  writeRecord(SHEETS.users, HEADERS.users, user._row, user);
+  return user.exposure;
 }
 
 function updateRowStats(payload) {
@@ -241,7 +250,7 @@ function publicLedger() {
       name: user.name,
       balance: toNumber(user.balance, 0),
       totalStake: userBets.reduce((sum, bet) => sum + toNumber(bet.stake, 0), 0),
-      exposure: exposureForPendingBets(pending),
+      exposure: toNumber(user.exposure, null) === null ? exposureForPendingBets(pending) : toNumber(user.exposure, 0),
       pnl: settled.reduce((sum, bet) => sum + toNumber(bet.pnl, 0), 0),
       betCount: userBets.length,
       lastLoginAt: user.lastLoginAt,
@@ -251,7 +260,7 @@ function publicLedger() {
   });
 
   return {
-    users: users.map((user) => ({ username: user.username, name: user.name, role: user.role, balance: user.balance, createdAt: user.createdAt, lastLoginAt: user.lastLoginAt, lastSeenAt: user.lastSeenAt, isOnline: user.isOnline })),
+    users: users.map((user) => ({ username: user.username, name: user.name, role: user.role, balance: user.balance, exposure: user.exposure, createdAt: user.createdAt, lastLoginAt: user.lastLoginAt, lastSeenAt: user.lastSeenAt, isOnline: user.isOnline })),
     bets,
     summary
   };
@@ -284,7 +293,7 @@ function createUser(payload) {
       return { statusCode: 409, error: "User already exists in Login Details." };
     }
 
-    const user = { username, password, name, role: "user", balance, createdAt: new Date().toISOString() };
+    const user = { username, password, name, role: "user", balance, exposure: 0, createdAt: new Date().toISOString() };
     appendRecord(SHEETS.users, HEADERS.users, user);
     appendRecord(SHEETS.login, HEADERS.login, { username, password, name, role: "user" });
     return { user: { username, name, role: "user", balance } };
@@ -395,6 +404,8 @@ function placeBet(payload) {
       verifiedAt: payload.verifiedAt
     };
     appendRecord(SHEETS.bets, HEADERS.bets, bet);
+    const updatedBets = readRows(SHEETS.bets, HEADERS.bets);
+    refreshUserExposure(users, updatedBets, username);
     return { bet, ledger: publicLedger() };
   } finally {
     lock.releaseLock();
@@ -442,8 +453,9 @@ function settleBet(payload) {
     bet.result = result;
     bet.resultRun = payload.resultRun !== undefined && payload.resultRun !== null ? payload.resultRun : "";
     bet.settledAt = new Date().toISOString();
-    writeRecord(SHEETS.users, HEADERS.users, user._row, user);
     writeRecord(SHEETS.bets, HEADERS.bets, bet._row, bet);
+    const updatedBets = readRows(SHEETS.bets, HEADERS.bets);
+    refreshUserExposure(users, updatedBets, user.username);
     return { bet, ledger: publicLedger() };
   } finally {
     lock.releaseLock();

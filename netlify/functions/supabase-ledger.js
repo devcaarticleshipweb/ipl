@@ -61,6 +61,7 @@ function appUser(row) {
     name: row.name,
     role: row.role,
     balance: row.balance,
+    exposure: row.exposure,
     createdAt: row.created_at,
     lastLoginAt: row.last_login_at,
     lastSeenAt: row.last_seen_at,
@@ -161,7 +162,7 @@ function fancyGroupExposure(bets) {
 function bookmakerGroupExposure(bets) {
   const runnerKeys = [...new Set(bets.map((bet) => bet.marketKey).filter(Boolean))];
   if (!runnerKeys.length) return 0;
-  const outcomeKeys = [...runnerKeys, "__OTHER_RUNNER__"];
+  const outcomeKeys = runnerKeys.length === 1 ? [...runnerKeys, "__OTHER_RUNNER__"] : runnerKeys;
   const positions = outcomeKeys.map((runnerKey) => bets.reduce((sum, bet) => {
     const stake = toNumber(bet.stake, 0);
     const profit = toNumber(bet.estimatedProfit, betProfit(stake, bet.odds));
@@ -193,12 +194,13 @@ function publicLedger(users, bets) {
     const userBets = appBets.filter((bet) => String(bet.username).toLowerCase() === String(user.username).toLowerCase());
     const pending = userBets.filter((bet) => bet.status === "PENDING");
     const settled = userBets.filter((bet) => bet.status === "SETTLED");
+    const storedExposure = toNumber(user.exposure, null);
     return {
       username: user.username,
       name: user.name,
       balance: toNumber(user.balance, 0),
       totalStake: userBets.reduce((sum, bet) => sum + toNumber(bet.stake, 0), 0),
-      exposure: exposureForPendingBets(pending),
+      exposure: storedExposure === null ? exposureForPendingBets(pending) : storedExposure,
       pnl: settled.reduce((sum, bet) => sum + toNumber(bet.pnl, 0), 0),
       betCount: userBets.length,
       lastLoginAt: user.lastLoginAt,
@@ -208,6 +210,16 @@ function publicLedger(users, bets) {
   });
 
   return { users: appUsers, bets: appBets, summary, backend: "supabase" };
+}
+
+async function refreshUserExposure(username) {
+  const rows = await supabaseFetch(`/rest/v1/bets?select=*&username=eq.${encodeURIComponent(username)}&status=eq.PENDING`);
+  const exposure = exposureForPendingBets((rows || []).map(appBet));
+  await supabaseFetch(`/rest/v1/users?username=eq.${encodeURIComponent(username)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ exposure })
+  });
+  return exposure;
 }
 
 async function getLedger() {
@@ -241,7 +253,7 @@ async function createUser(payload) {
 
   const inserted = await supabaseFetch("/rest/v1/users", {
     method: "POST",
-    body: JSON.stringify([{ username, password, name, role: "user", balance }])
+    body: JSON.stringify([{ username, password, name, role: "user", balance, exposure: 0 }])
   });
   return { user: appUser(inserted[0]), backend: "supabase" };
 }
@@ -337,6 +349,7 @@ async function placeBet(payload) {
       verified_at: payload.verifiedAt
     }])
   });
+  await refreshUserExposure(username);
 
   return { bet: appBet(inserted[0]), ledger: await getLedger(), backend: "supabase" };
 }
@@ -385,6 +398,7 @@ async function settleBet(payload) {
     method: "PATCH",
     body: JSON.stringify({ status: "SETTLED", result, result_run: resultRun, pnl, settled_at: new Date().toISOString() })
   });
+  await refreshUserExposure(bet.username);
   return { bet: appBet(updated[0]), ledger: await getLedger(), backend: "supabase" };
 }
 
