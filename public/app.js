@@ -271,12 +271,7 @@ function createCrexEmbedSection(url) {
   const section = document.createElement("section");
   section.className = "crex-embed-section";
   section.innerHTML = `
-    <div class="crex-embed-head">
-      <strong>Crex Live Score</strong>
-      <a href="${url}" target="_blank" rel="noopener noreferrer">Open</a>
-    </div>
     <iframe class="crex-embed-frame" src="${url}" title="Crex live score" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
-    <div class="crex-embed-note">If the live score does not load here, use the Open button.</div>
   `;
   crexEmbedCache = { url, node: section };
   return section;
@@ -3141,8 +3136,8 @@ function renderPayload(payload, preparedRows = null) {
 
   const fragment = document.createDocumentFragment();
   renderAccountBar();
-  if (hasLiveScoreConfig()) fragment.append(createLiveScoreSection());
   const crexUrl = crexScoreUrl();
+  if (hasLiveScoreConfig() && !crexUrl) fragment.append(createLiveScoreSection());
   const crexSection = crexUrl ? createCrexEmbedSection(crexUrl) : null;
   const keepExistingCrex = crexSection && crexSection.parentElement === content;
   if (crexSection && !keepExistingCrex) fragment.append(crexSection);
