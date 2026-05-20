@@ -51,6 +51,10 @@ let liveScoreState = {
   error: "",
   fetchedAt: ""
 };
+let crexEmbedCache = {
+  url: "",
+  node: null
+};
 let lastOverStripSignature = "";
 let overStripScrollLeft = null;
 let liveScoreCompact = false;
@@ -261,6 +265,9 @@ function crexScoreUrl() {
 }
 
 function createCrexEmbedSection(url) {
+  if (crexEmbedCache.url === url && crexEmbedCache.node) {
+    return crexEmbedCache.node;
+  }
   const section = document.createElement("section");
   section.className = "crex-embed-section";
   section.innerHTML = `
@@ -271,6 +278,7 @@ function createCrexEmbedSection(url) {
     <iframe class="crex-embed-frame" src="${url}" title="Crex live score" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
     <div class="crex-embed-note">If the live score does not load here, use the Open button.</div>
   `;
+  crexEmbedCache = { url, node: section };
   return section;
 }
 
@@ -3135,7 +3143,9 @@ function renderPayload(payload, preparedRows = null) {
   renderAccountBar();
   if (hasLiveScoreConfig()) fragment.append(createLiveScoreSection());
   const crexUrl = crexScoreUrl();
-  if (crexUrl) fragment.append(createCrexEmbedSection(crexUrl));
+  const crexSection = crexUrl ? createCrexEmbedSection(crexUrl) : null;
+  const keepExistingCrex = crexSection && crexSection.parentElement === content;
+  if (crexSection && !keepExistingCrex) fragment.append(crexSection);
 
   if (bookmakerRows.length) fragment.append(createMarketSection("Bookmaker", ["Bookmaker", "Back", "Lay"], bookmakerRows, false));
   if (fancyRows.length) fragment.append(createMarketSection("Fancy", ["Bookmaker", "No", "Yes"], fancyRows, true));
@@ -3147,7 +3157,14 @@ function renderPayload(payload, preparedRows = null) {
   }
 
   fragment.append(createSummary(payload, rows.length));
-  content.replaceChildren(fragment);
+  if (keepExistingCrex) {
+    [...content.children].forEach((child) => {
+      if (child !== crexSection) child.remove();
+    });
+    content.insertBefore(fragment, crexSection.nextSibling);
+  } else {
+    content.replaceChildren(fragment);
+  }
   hasRenderedData = true;
 
   const nextCache = new Map();
