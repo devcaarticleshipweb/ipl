@@ -230,13 +230,14 @@ function publicLedger(ledger) {
     const userBets = ledger.bets.filter((bet) => String(bet.username).toLowerCase() === String(user.username).toLowerCase());
     const pending = userBets.filter((bet) => bet.status === "PENDING");
     const settled = userBets.filter((bet) => bet.status === "SETTLED");
-    const storedExposure = numericValue(user.exposure);
+    const computedExposure = exposureForPendingBets(pending);
+    user.exposure = computedExposure;
     return {
       username: user.username,
       name: user.name,
       balance: numericValue(user.balance) || 0,
       totalStake: userBets.reduce((sum, bet) => sum + (numericValue(bet.stake) || 0), 0),
-      exposure: storedExposure === null ? exposureForPendingBets(pending) : storedExposure,
+      exposure: computedExposure,
       pnl: settled.reduce((sum, bet) => sum + (numericValue(bet.pnl) || 0), 0),
       betCount: userBets.length
     };

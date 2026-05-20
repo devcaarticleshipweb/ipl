@@ -245,12 +245,17 @@ function publicLedger() {
     const userBets = bets.filter((bet) => String(bet.username).toLowerCase() === String(user.username).toLowerCase());
     const pending = userBets.filter((bet) => bet.status === "PENDING");
     const settled = userBets.filter((bet) => bet.status === "SETTLED");
+    const computedExposure = exposureForPendingBets(pending);
+    if (toNumber(user.exposure, null) !== computedExposure) {
+      user.exposure = computedExposure;
+      writeRecord(SHEETS.users, HEADERS.users, user._row, user);
+    }
     return {
       username: user.username,
       name: user.name,
       balance: toNumber(user.balance, 0),
       totalStake: userBets.reduce((sum, bet) => sum + toNumber(bet.stake, 0), 0),
-      exposure: toNumber(user.exposure, null) === null ? exposureForPendingBets(pending) : toNumber(user.exposure, 0),
+      exposure: computedExposure,
       pnl: settled.reduce((sum, bet) => sum + toNumber(bet.pnl, 0), 0),
       betCount: userBets.length,
       lastLoginAt: user.lastLoginAt,

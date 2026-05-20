@@ -474,8 +474,8 @@ function Get-PublicLedger {
     $Pending = @($UserBets | Where-Object { $_.status -eq "PENDING" })
     $Settled = @($UserBets | Where-Object { $_.status -eq "SETTLED" })
     $TotalStake = ($UserBets | Measure-Object -Property stake -Sum).Sum
-    $StoredExposure = Get-NumericValue -Value $User.exposure
-    $Exposure = if ($null -eq $StoredExposure) { Get-ExposureForPendingBets -Pending $Pending } else { $StoredExposure }
+    $Exposure = Get-ExposureForPendingBets -Pending $Pending
+    $User.exposure = $Exposure
     $Pnl = ($Settled | Measure-Object -Property pnl -Sum).Sum
 
     $Summary += [ordered]@{

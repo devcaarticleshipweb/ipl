@@ -227,7 +227,22 @@ async function getLedger() {
     supabaseFetch("/rest/v1/users?select=*&order=created_at.asc"),
     supabaseFetch("/rest/v1/bets?select=*&order=placed_at.asc")
   ]);
+  await syncUserExposures(users || [], bets || []);
   return publicLedger(users || [], bets || []);
+}
+
+async function syncUserExposures(users, bets) {
+  const appBets = (bets || []).map(appBet);
+  await Promise.all((users || []).map(async (user) => {
+    const pending = appBets.filter((bet) => String(bet.username).toLowerCase() === String(user.username).toLowerCase() && bet.status === "PENDING");
+    const exposure = exposureForPendingBets(pending);
+    if (toNumber(user.exposure, null) === exposure) return;
+    user.exposure = exposure;
+    await supabaseFetch(`/rest/v1/users?username=eq.${encodeURIComponent(user.username)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ exposure })
+    });
+  }));
 }
 
 async function auth(payload) {
