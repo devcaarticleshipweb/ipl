@@ -22,6 +22,7 @@ const ENABLE_BACKGROUND_SHEETS_SYNC = false;
 const SESSION_KEY = "fair91.auth";
 const SELECTED_EVENT_KEY = "fair91.selectedEventId";
 const DEFAULT_CREX_KKR_MI_URL = "https://crex.com/cricket-live-score/kkr-vs-mi-65th-match-indian-premier-league-2026-match-updates-119A";
+const TOSSMAKER_VISIBILITY_KEY = "TOSSMAKER:__VISIBILITY__";
 
 let refreshTimer = null;
 let liveScoreRefreshTimer = null;
@@ -509,6 +510,19 @@ function buildBookmakerRows(root) {
     }));
 }
 
+function buildTossmakerRows(bookmakerRows) {
+  return bookmakerRows.map((row) => ({
+    ...row,
+    key: row.key.replace(/^BOOKMAKER:/, "TOSSMAKER:"),
+    marketType: "TOSSMAKER",
+    backPrice: 0,
+    layPrice: 0,
+    backSize: "",
+    laySize: "",
+    status: "SUSPENDED"
+  }));
+}
+
 function buildFancyRows(root) {
   const fancy = root?.fancy;
   if (!isPlainObject(fancy)) return [];
@@ -550,7 +564,8 @@ function normalizeFancyMarketLabel(marketName) {
 
 function buildOddsRows(value) {
   const root = unwrapApiData(value);
-  return [...buildBookmakerRows(root), ...buildFancyRows(root)];
+  const bookmakerRows = buildBookmakerRows(root);
+  return [...bookmakerRows, ...buildTossmakerRows(bookmakerRows), ...buildFancyRows(root)];
 }
 
 function manualOverrideKey(eventId, marketKey) {
@@ -572,6 +587,15 @@ function normalizeManualOverride(row) {
     updatedBy: row.updatedBy,
     updatedAt: row.updatedAt
   };
+}
+
+function tossmakerVisibilityOverride(eventId = selectedEventId) {
+  return manualOddsOverrides.get(manualOverrideKey(eventId, TOSSMAKER_VISIBILITY_KEY));
+}
+
+function isTossmakerHidden(eventId = selectedEventId) {
+  const override = tossmakerVisibilityOverride(eventId);
+  return override?.enabled !== false && normalizeStatus(override?.status) === "HIDDEN";
 }
 
 async function fetchManualOdds(eventId = selectedEventId) {
@@ -1913,6 +1937,10 @@ function isFancyBet(rowData) {
   return rowData?.marketType === "FANCY";
 }
 
+function isRunnerMarketType(marketType) {
+  return marketType === "BOOKMAKER" || marketType === "TOSSMAKER";
+}
+
 function fancyRateForSide(rowData, side) {
   if (!isFancyBet(rowData)) return "";
   return side === "Yes" ? rowData.backSize : rowData.laySize;
@@ -2209,12 +2237,13 @@ function createPriceBox(kind, key, price, size, rowData, sideLabel) {
   return box;
 }
 
-function visibleBookmakerBets() {
+function visibleRunnerBets(rowData) {
   const session = currentSession();
   if (!session) return [];
   const isMaster = isMasterSession();
   return (bettingLedger.bets || []).filter((bet) => {
-    if (bet.marketType !== "BOOKMAKER") return false;
+    if (!isRunnerMarketType(bet.marketType)) return false;
+    if (rowData && bet.marketType !== rowData.marketType) return false;
     if (String(bet.eventId || "") !== String(selectedEventId || "")) return false;
     if (bet.status && bet.status !== "PENDING") return false;
     return isMaster || String(bet.username).toLowerCase() === String(session.username).toLowerCase();
@@ -2223,7 +2252,7 @@ function visibleBookmakerBets() {
 
 function bookmakerPositionForRunner(rowData) {
   const isMaster = isMasterSession();
-  const userPnl = visibleBookmakerBets().reduce((sum, bet) => {
+  const userPnl = visibleRunnerBets(rowData).reduce((sum, bet) => {
     const stake = Number(bet.stake);
     const rateAmount = Number(bet.estimatedProfit || bookmakerRateAmount(stake, bet.odds));
     const liability = Number(bet.liability || rateAmount);
@@ -2777,6 +2806,36 @@ function betPnlDisplay(bet, isMaster = false) {
   return `<span class="${pnl < 0 ? "loss" : "profit"}">${sign}${displayMoney(Math.abs(pnl))}</span>`;
 }
 
+function matchReportRows(bets, isMaster = false) {
+  const groups = new Map();
+  bets.forEach((bet) => {
+    const key = bet.eventId || bet.eventName || "unknown";
+    if (!groups.has(key)) {
+      groups.set(key, {
+        match: bet.eventName || bet.eventId || "-",
+        win: 0,
+        loss: 0,
+        pnl: 0,
+        latestAt: ""
+      });
+    }
+
+    const row = groups.get(key);
+    if (bet.status === "SETTLED") {
+      const pnl = isMaster ? -Number(bet.pnl || 0) : Number(bet.pnl || 0);
+      if (pnl > 0) row.win += pnl;
+      if (pnl < 0) row.loss += Math.abs(pnl);
+      row.pnl += pnl;
+      row.latestAt = [row.latestAt, bet.settledAt || bet.placedAt || ""].sort().at(-1) || "";
+    } else {
+      row.latestAt = [row.latestAt, bet.placedAt || ""].sort().at(-1) || "";
+    }
+  });
+
+  return [...groups.values()]
+    .sort((a, b) => String(b.latestAt).localeCompare(String(a.latestAt)));
+}
+
 function accountMetrics() {
   const session = currentSession();
   if (!session) return null;
@@ -2830,11 +2889,13 @@ function renderAccountBar() {
       <strong class="${Number(metrics.pnl || 0) < 0 ? "loss" : "profit"}">${Number(metrics.pnl || 0) < 0 ? "-" : "+"}${displayMoney(Math.abs(Number(metrics.pnl || 0)))}</strong>
     </div>
     ${isMasterSession() ? '<button type="button" class="manual-odds-btn">Manual Odds</button>' : ""}
+    ${isMasterSession() ? `<button type="button" class="tossmaker-toggle-btn">${isTossmakerHidden() ? "Show Tossmaker" : "Hide Tossmaker"}</button>` : ""}
     ${isMasterSession() ? '<button type="button" class="message-btn">Message</button>' : ""}
     <button type="button" class="bet-slip-btn">Bet Slip</button>
     <button type="button" class="logout-btn">LOG OUT</button>
   `;
   accountBar.querySelector(".manual-odds-btn")?.addEventListener("click", showManualOddsModal);
+  accountBar.querySelector(".tossmaker-toggle-btn")?.addEventListener("click", toggleTossmakerVisibility);
   accountBar.querySelector(".message-btn")?.addEventListener("click", editAppMessage);
   accountBar.querySelector(".bet-slip-btn")?.addEventListener("click", showBetSlipModal);
   accountBar.querySelector(".logout-btn")?.addEventListener("click", logout);
@@ -2885,13 +2946,50 @@ async function editAppMessage() {
   }
 }
 
+async function toggleTossmakerVisibility() {
+  if (!isMasterSession() || !selectedEventId) return;
+  const hide = !isTossmakerHidden();
+  const button = accountBar?.querySelector(".tossmaker-toggle-btn");
+  if (button) button.disabled = true;
+
+  try {
+    const response = await fetch("/api/manual-odds", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify({
+        action: "saveManualOdds",
+        eventId: selectedEventId,
+        marketKey: TOSSMAKER_VISIBILITY_KEY,
+        marketName: "Tossmaker Visibility",
+        marketType: "TOSSMAKER_SETTING",
+        status: hide ? "HIDDEN" : "VISIBLE",
+        enabled: true,
+        updatedBy: currentSession()?.username || ""
+      })
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || payload.error || "Unable to update Tossmaker visibility.");
+    if (payload.override) {
+      const override = normalizeManualOverride(payload.override);
+      manualOddsOverrides.set(manualOverrideKey(override.eventId, override.marketKey), override);
+    }
+    renderCurrentData();
+    showToast(hide ? "Tossmaker hidden." : "Tossmaker visible.", "success");
+  } catch (error) {
+    showToast(error.message || "Unable to update Tossmaker visibility.", "error");
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
 function manualFieldValue(value) {
   return value === null || value === undefined ? "" : String(value);
 }
 
 function manualOddsRows() {
   const rows = window.__fair91LastRows || [];
-  return rows.filter((row) => row.marketType === "BOOKMAKER" || row.marketType === "FANCY");
+  return rows.filter((row) => row.marketType === "BOOKMAKER" || row.marketType === "TOSSMAKER" || row.marketType === "FANCY");
 }
 
 function showManualOddsModal() {
@@ -3020,6 +3118,7 @@ function createBettingPanel() {
   const myBets = (bettingLedger.bets || [])
     .filter((bet) => isMaster || String(bet.username).toLowerCase() === String(session.username).toLowerCase())
     .reverse();
+  const reportRows = matchReportRows(myBets, isMaster);
 
   section.innerHTML = `
     <div class="betting-head">
@@ -3066,6 +3165,22 @@ function createBettingPanel() {
         </div>
       </div>
     ` : ""}
+    <div class="ledger-table-wrap report-table-wrap">
+      <h3>Match Wise P&L (${reportRows.length})</h3>
+      <table class="ledger-table report-table">
+        <thead><tr><th>Match</th><th>Win</th><th>Loss</th><th>P&L</th></tr></thead>
+        <tbody>
+          ${reportRows.map((row) => `
+            <tr>
+              <td>${simpleValue(row.match)}</td>
+              <td class="profit">+${displayMoney(row.win)}</td>
+              <td class="loss">-${displayMoney(row.loss)}</td>
+              <td class="${Number(row.pnl || 0) < 0 ? "loss" : "profit"}">${Number(row.pnl || 0) < 0 ? "-" : "+"}${displayMoney(Math.abs(Number(row.pnl || 0)))}</td>
+            </tr>
+          `).join("") || '<tr><td colspan="4">No match report yet.</td></tr>'}
+        </tbody>
+      </table>
+    </div>
     <div class="ledger-table-wrap">
       <h3>${isMaster ? "All Bets" : "My Bets"} (${myBets.length})</h3>
       <table class="ledger-table">
@@ -3130,6 +3245,7 @@ function renderPayload(payload, preparedRows = null) {
   const rows = preparedRows || applyManualOverrides(buildOddsRows(payload.data));
   window.__fair91LastRows = rows;
   const bookmakerRows = rows.filter((row) => row.marketType === "BOOKMAKER");
+  const tossmakerRows = isTossmakerHidden() ? [] : rows.filter((row) => row.marketType === "TOSSMAKER");
   const fancyRows = rows
     .filter((row) => row.marketType === "FANCY")
     .sort((a, b) => Number(hasFancyLadder(b)) - Number(hasFancyLadder(a)));
@@ -3143,8 +3259,9 @@ function renderPayload(payload, preparedRows = null) {
   if (crexSection && !keepExistingCrex) fragment.append(crexSection);
 
   if (bookmakerRows.length) fragment.append(createMarketSection("Bookmaker", ["Bookmaker", "Back", "Lay"], bookmakerRows, false));
+  if (tossmakerRows.length) fragment.append(createMarketSection("Tossmaker", ["Tossmaker", "Back", "Lay"], tossmakerRows, false));
   if (fancyRows.length) fragment.append(createMarketSection("Fancy", ["Bookmaker", "No", "Yes"], fancyRows, true));
-  if (!bookmakerRows.length && !fancyRows.length) {
+  if (!bookmakerRows.length && !tossmakerRows.length && !fancyRows.length) {
     const empty = document.createElement("div");
     empty.className = "empty-state";
     empty.innerHTML = "<h2>No records found</h2><p>This event returned no odds rows.</p>";

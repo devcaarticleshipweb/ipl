@@ -447,7 +447,8 @@ function Get-ExposureForPendingBets {
   param($Pending)
   $Groups = @{}
   foreach ($Bet in $Pending) {
-    $GroupKey = if ($Bet.marketType -eq "BOOKMAKER") { "$($Bet.eventId)::BOOKMAKER::BOOKMAKER" } else { "$($Bet.eventId)::$($Bet.marketType)::$($Bet.marketKey)" }
+    $IsRunnerMarket = $Bet.marketType -eq "BOOKMAKER" -or $Bet.marketType -eq "TOSSMAKER"
+    $GroupKey = if ($IsRunnerMarket) { "$($Bet.eventId)::$($Bet.marketType)::$($Bet.marketType)" } else { "$($Bet.eventId)::$($Bet.marketType)::$($Bet.marketKey)" }
     if (-not $Groups.ContainsKey($GroupKey)) { $Groups[$GroupKey] = @() }
     $Groups[$GroupKey] = @($Groups[$GroupKey] + $Bet)
   }
@@ -455,7 +456,7 @@ function Get-ExposureForPendingBets {
   foreach ($Key in $Groups.Keys) {
     $GroupBets = @($Groups[$Key])
     if ($GroupBets[0].marketType -eq "FANCY") { $Exposure += Get-FancyGroupExposure -Bets $GroupBets }
-    elseif ($GroupBets[0].marketType -eq "BOOKMAKER") { $Exposure += Get-BookmakerGroupExposure -Bets $GroupBets }
+    elseif ($GroupBets[0].marketType -eq "BOOKMAKER" -or $GroupBets[0].marketType -eq "TOSSMAKER") { $Exposure += Get-BookmakerGroupExposure -Bets $GroupBets }
     else { foreach ($Bet in $GroupBets) { $Exposure += (Get-NumericValue -Value $Bet.liability) } }
   }
   return [Math]::Round($Exposure, 2)

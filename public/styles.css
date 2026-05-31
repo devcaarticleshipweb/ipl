@@ -1237,6 +1237,14 @@ pre {
   font-size: 0.72rem;
 }
 
+.report-table {
+  min-width: 620px;
+}
+
+.report-table td:first-child {
+  font-weight: 800;
+}
+
 .profit {
   color: #5ee090;
 }

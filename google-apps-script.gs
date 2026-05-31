@@ -173,12 +173,16 @@ function bookmakerGroupExposure(bets) {
   return Math.max(0, -Math.min.apply(null, positions));
 }
 
+function isRunnerMarketType(marketType) {
+  return marketType === "BOOKMAKER" || marketType === "TOSSMAKER";
+}
+
 function exposureForPendingBets(pendingBets) {
-  const groups = groupBy(pendingBets, (bet) => `${bet.eventId || ""}::${bet.marketType || ""}::${bet.marketType === "BOOKMAKER" ? "BOOKMAKER" : bet.marketKey || bet.marketName || ""}`);
+  const groups = groupBy(pendingBets, (bet) => `${bet.eventId || ""}::${bet.marketType || ""}::${isRunnerMarketType(bet.marketType) ? bet.marketType : bet.marketKey || bet.marketName || ""}`);
   return Number(Object.keys(groups).reduce((sum, key) => {
     const bets = groups[key];
     if (bets[0] && bets[0].marketType === "FANCY") return sum + fancyGroupExposure(bets);
-    if (bets[0] && bets[0].marketType === "BOOKMAKER") return sum + bookmakerGroupExposure(bets);
+    if (bets[0] && isRunnerMarketType(bets[0].marketType)) return sum + bookmakerGroupExposure(bets);
     return sum + bets.reduce((inner, bet) => inner + toNumber(bet.liability || bet.stake, 0), 0);
   }, 0).toFixed(2));
 }
