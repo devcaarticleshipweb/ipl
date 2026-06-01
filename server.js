@@ -139,10 +139,11 @@ function loadBettingLedger() {
     const parsed = JSON.parse(fs.readFileSync(BETTING_LEDGER_FILE, "utf8"));
     return {
       users: Array.isArray(parsed.users) ? parsed.users : [],
-      bets: Array.isArray(parsed.bets) ? parsed.bets : []
+      bets: Array.isArray(parsed.bets) ? parsed.bets : [],
+      fundLedger: Array.isArray(parsed.fundLedger) ? parsed.fundLedger : []
     };
   } catch {
-    return { users: [], bets: [] };
+    return { users: [], bets: [], fundLedger: [] };
   }
 }
 
@@ -250,6 +251,7 @@ function publicLedger(ledger) {
   return {
     users: ledger.users.map(({ password, ...user }) => user),
     bets: ledger.bets,
+    fundLedger: ledger.fundLedger || [],
     summary
   };
 }
@@ -347,6 +349,17 @@ async function handleBettingUsers(req, res) {
 
     const user = { username, password, name, role: "user", balance, exposure: 0, createdAt: new Date().toISOString() };
     ledger.users.push(user);
+    ledger.fundLedger = Array.isArray(ledger.fundLedger) ? ledger.fundLedger : [];
+    ledger.fundLedger.push({
+      id: Math.random().toString(16).slice(2, 14),
+      username,
+      mode: "OPENING",
+      amount: balance,
+      balanceBefore: 0,
+      balanceAfter: balance,
+      createdBy: body.updatedBy || body.createdBy || "",
+      createdAt: new Date().toISOString()
+    });
     saveBettingLedger(ledger);
     const { password: _password, ...safeUser } = user;
     sendJson(res, 200, { user: safeUser });
@@ -759,6 +772,11 @@ const server = http.createServer((req, res) => {
 
   if (requestUrl.pathname === "/api/betting-users") {
     handleSheetsBackedApi(req, res, "createUser");
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/funds") {
+    handleSheetsBackedApi(req, res, "adjustFunds");
     return;
   }
 

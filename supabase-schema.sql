@@ -65,10 +65,22 @@ create table if not exists public.app_messages (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.fund_ledger (
+  id uuid primary key default gen_random_uuid(),
+  username text not null references public.users(username),
+  mode text not null,
+  amount numeric not null,
+  balance_before numeric not null,
+  balance_after numeric not null,
+  created_by text,
+  created_at timestamptz not null default now()
+);
+
 alter table public.users replica identity full;
 alter table public.bets replica identity full;
 alter table public.manual_odds_overrides replica identity full;
 alter table public.app_messages replica identity full;
+alter table public.fund_ledger replica identity full;
 
 alter table public.bets
 add column if not exists result_run numeric,
@@ -79,6 +91,13 @@ add column if not exists exposure numeric not null default 0,
 add column if not exists last_login_at timestamptz,
 add column if not exists last_seen_at timestamptz,
 add column if not exists is_online boolean not null default false;
+
+do $$
+begin
+  alter publication supabase_realtime add table public.users;
+exception
+  when duplicate_object then null;
+end $$;
 
 do $$
 begin
@@ -101,14 +120,30 @@ exception
   when duplicate_object then null;
 end $$;
 
+do $$
+begin
+  alter publication supabase_realtime add table public.fund_ledger;
+exception
+  when duplicate_object then null;
+end $$;
+
 alter table public.users enable row level security;
 alter table public.bets enable row level security;
 alter table public.manual_odds_overrides enable row level security;
 alter table public.app_messages enable row level security;
+alter table public.fund_ledger enable row level security;
 
 drop policy if exists "allow anon realtime bets" on public.bets;
+drop policy if exists "allow anon realtime users" on public.users;
 drop policy if exists "allow anon realtime manual odds" on public.manual_odds_overrides;
 drop policy if exists "allow anon realtime app messages" on public.app_messages;
+drop policy if exists "allow anon realtime fund ledger" on public.fund_ledger;
+
+create policy "allow anon realtime users"
+on public.users
+for select
+to anon
+using (true);
 
 create policy "allow anon realtime bets"
 on public.bets
@@ -124,6 +159,12 @@ using (true);
 
 create policy "allow anon realtime app messages"
 on public.app_messages
+for select
+to anon
+using (true);
+
+create policy "allow anon realtime fund ledger"
+on public.fund_ledger
 for select
 to anon
 using (true);

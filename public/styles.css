@@ -66,14 +66,17 @@ input {
   top: 50%;
   transform: translateY(-50%);
   display: flex;
+  flex-wrap: nowrap;
   align-items: stretch;
-  gap: 8px;
-  max-width: min(760px, 66vw);
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: calc(100vw - 28px);
 }
 
 .account-stat {
-  min-width: 92px;
-  padding: 7px 10px;
+  min-width: 78px;
+  flex: 0 1 auto;
+  padding: 6px 8px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: rgba(24, 27, 34, 0.9);
@@ -90,7 +93,7 @@ input {
   display: block;
   margin-top: 2px;
   color: #f2f3f7;
-  font-size: 0.84rem;
+  font-size: 0.78rem;
   white-space: nowrap;
 }
 
@@ -105,14 +108,17 @@ input {
 .bet-slip-btn,
 .manual-odds-btn,
 .message-btn,
+.tossmaker-toggle-btn,
 .logout-btn {
   border: 0;
   border-radius: 8px;
-  min-height: 48px;
-  padding: 0 14px;
+  min-height: 42px;
+  padding: 0 10px;
   font-weight: 900;
   cursor: pointer;
   white-space: nowrap;
+  flex: 0 0 auto;
+  font-size: 0.78rem;
 }
 
 .bet-slip-btn {
@@ -124,6 +130,17 @@ input {
   border: 1px solid rgba(224, 190, 116, 0.42);
   background: rgba(224, 190, 116, 0.12);
   color: #f5d271;
+}
+
+.tossmaker-toggle-btn {
+  border: 1px solid rgba(120, 196, 255, 0.42);
+  background: rgba(82, 156, 216, 0.14);
+  color: #a9dcff;
+}
+
+.tossmaker-toggle-btn:hover {
+  border-color: rgba(169, 220, 255, 0.72);
+  background: rgba(82, 156, 216, 0.22);
 }
 
 .message-btn {
@@ -1276,6 +1293,7 @@ pre {
 
 .settle-btn,
 .settle-run-btn,
+.user-detail-btn,
 .fund-btn {
   width: 28px;
   height: 28px;
@@ -1293,6 +1311,20 @@ pre {
   min-width: 48px;
   padding: 0 8px;
   color: #f5d271;
+}
+
+.user-detail-btn {
+  width: auto;
+  min-width: 54px;
+  padding: 0 10px;
+  border-color: rgba(224, 190, 116, 0.42);
+  background: linear-gradient(130deg, rgba(224, 190, 116, 0.2), rgba(191, 154, 73, 0.14));
+  color: #f5d271;
+}
+
+.user-detail-btn:hover {
+  border-color: rgba(245, 210, 113, 0.72);
+  background: linear-gradient(130deg, rgba(224, 190, 116, 0.3), rgba(191, 154, 73, 0.22));
 }
 
 .fund-btn {
@@ -1660,6 +1692,7 @@ pre {
   .bet-slip-btn,
   .manual-odds-btn,
   .message-btn,
+  .tossmaker-toggle-btn,
   .logout-btn {
     width: min(108px, calc(50vw - 18px));
     min-height: 48px;

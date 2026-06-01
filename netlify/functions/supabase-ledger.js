@@ -116,6 +116,19 @@ function appManualOdds(row) {
   };
 }
 
+function appFundLedger(row) {
+  return {
+    id: row.id,
+    username: row.username,
+    mode: row.mode,
+    amount: row.amount,
+    balanceBefore: row.balance_before,
+    balanceAfter: row.balance_after,
+    createdAt: row.created_at,
+    createdBy: row.created_by
+  };
+}
+
 function appMessage(row) {
   return {
     id: row?.id || "global",
@@ -191,7 +204,7 @@ function exposureForPendingBets(pendingBets) {
   return money(exposure);
 }
 
-function publicLedger(users, bets) {
+function publicLedger(users, bets, fundLedger = []) {
   const appUsers = users.map(appUser);
   const appBets = bets.map(appBet);
   const summary = appUsers.map((user) => {
@@ -213,7 +226,7 @@ function publicLedger(users, bets) {
     };
   });
 
-  return { users: appUsers, bets: appBets, summary, backend: "supabase" };
+  return { users: appUsers, bets: appBets, fundLedger: fundLedger.map(appFundLedger), summary, backend: "supabase" };
 }
 
 async function refreshUserExposure(username) {
@@ -227,12 +240,13 @@ async function refreshUserExposure(username) {
 }
 
 async function getLedger() {
-  const [users, bets] = await Promise.all([
+  const [users, bets, fundLedger] = await Promise.all([
     supabaseFetch("/rest/v1/users?select=*&order=created_at.asc"),
-    supabaseFetch("/rest/v1/bets?select=*&order=placed_at.asc")
+    supabaseFetch("/rest/v1/bets?select=*&order=placed_at.asc"),
+    supabaseFetch("/rest/v1/fund_ledger?select=*&order=created_at.desc").catch(() => [])
   ]);
   await syncUserExposures(users || [], bets || []);
-  return publicLedger(users || [], bets || []);
+  return publicLedger(users || [], bets || [], fundLedger || []);
 }
 
 async function syncUserExposures(users, bets) {
@@ -274,6 +288,17 @@ async function createUser(payload) {
     method: "POST",
     body: JSON.stringify([{ username, password, name, role: "user", balance, exposure: 0 }])
   });
+  await supabaseFetch("/rest/v1/fund_ledger", {
+    method: "POST",
+    body: JSON.stringify([{
+      username,
+      mode: "OPENING",
+      amount: money(balance),
+      balance_before: 0,
+      balance_after: money(balance),
+      created_by: payload.updatedBy || payload.createdBy || ""
+    }])
+  });
   return { user: appUser(inserted[0]), backend: "supabase" };
 }
 
@@ -293,9 +318,21 @@ async function adjustFunds(payload) {
   const nextBalance = mode === "ADD" ? balance + amount : balance - amount;
   if (nextBalance < 0) return { statusCode: 400, error: "Cannot remove more than available balance." };
 
+  const next = money(nextBalance);
   const updated = await supabaseFetch(`/rest/v1/users?username=eq.${encodeURIComponent(username)}`, {
     method: "PATCH",
-    body: JSON.stringify({ balance: money(nextBalance) })
+    body: JSON.stringify({ balance: next })
+  });
+  await supabaseFetch("/rest/v1/fund_ledger", {
+    method: "POST",
+    body: JSON.stringify([{
+      username,
+      mode,
+      amount: money(amount),
+      balance_before: money(balance),
+      balance_after: next,
+      created_by: payload.updatedBy || payload.createdBy || ""
+    }])
   });
   return { user: appUser(updated[0]), ledger: await getLedger(), backend: "supabase" };
 }

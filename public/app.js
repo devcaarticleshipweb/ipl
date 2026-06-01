@@ -62,6 +62,7 @@ let liveScoreCompact = false;
 let bettingLedger = {
   users: [],
   bets: [],
+  fundLedger: [],
   summary: []
 };
 let manualOddsOverrides = new Map();
@@ -388,7 +389,7 @@ function logout() {
   stopAutoRefresh();
   stopSupabaseRealtime();
   clearSession();
-  bettingLedger = { users: [], bets: [], summary: [] };
+  bettingLedger = { users: [], bets: [], fundLedger: [], summary: [] };
   liveScoreState = { data: null, error: "", fetchedAt: "" };
   loginPass.value = "";
   loginError.textContent = "";
@@ -430,7 +431,13 @@ async function fetchBettingLedger({ force = false, timeoutMs = 0 } = {}) {
       const response = await fetch(ledgerUrl, { cache: "no-store", signal: controller?.signal });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.detail || payload.error || "Unable to load betting ledger.");
-      bettingLedger = payload;
+      bettingLedger = {
+        users: Array.isArray(payload.users) ? payload.users : [],
+        bets: Array.isArray(payload.bets) ? payload.bets : [],
+        fundLedger: Array.isArray(payload.fundLedger) ? payload.fundLedger : [],
+        summary: Array.isArray(payload.summary) ? payload.summary : [],
+        backend: payload.backend
+      };
       return payload;
     } catch (error) {
       if (error.name !== "AbortError") console.warn("Unable to load betting ledger", error);
@@ -2677,7 +2684,7 @@ async function createUserFromPrompt() {
     const response = await fetch("/api/betting-users", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username, password, name, balance })
+      body: JSON.stringify({ username, password, name, balance, updatedBy: currentSession()?.username || "" })
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.detail || payload.error || "Unable to create user.");
@@ -2706,7 +2713,7 @@ async function adjustUserFunds(username, mode) {
     const response = await fetch("/api/funds", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username, mode, amount })
+      body: JSON.stringify({ username, mode, amount, updatedBy: currentSession()?.username || "" })
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.detail || payload.error || "Unable to adjust funds.");
@@ -2751,6 +2758,14 @@ function userSummaryRowsForMaster() {
     const user = userLedgerRecord(row.username);
     return String(user.role || "user").toLowerCase() !== "master";
   });
+}
+
+function userBets(username) {
+  return (bettingLedger.bets || []).filter((bet) => String(bet.username).toLowerCase() === String(username).toLowerCase());
+}
+
+function userFunds(username) {
+  return (bettingLedger.fundLedger || []).filter((row) => String(row.username).toLowerCase() === String(username).toLowerCase());
 }
 
 function masterBookSummary() {
@@ -2834,6 +2849,98 @@ function matchReportRows(bets, isMaster = false) {
 
   return [...groups.values()]
     .sort((a, b) => String(b.latestAt).localeCompare(String(a.latestAt)));
+}
+
+function visibleFundLedgerRows(isMaster = false) {
+  const session = currentSession();
+  if (!session) return [];
+  return (bettingLedger.fundLedger || [])
+    .filter((row) => isMaster || String(row.username).toLowerCase() === String(session.username).toLowerCase())
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+}
+
+function showUserDetailModal(username) {
+  if (!isMasterSession()) return;
+  const summary = userSummary(username);
+  const user = userLedgerRecord(username);
+  const bets = userBets(username).slice().sort((a, b) => String(b.placedAt || "").localeCompare(String(a.placedAt || "")));
+  const funds = userFunds(username).slice().sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  const settled = bets.filter((bet) => bet.status === "SETTLED");
+  const pending = bets.filter((bet) => bet.status === "PENDING");
+  const pnl = Number(summary.pnl || 0);
+  const existing = document.querySelector(".user-detail-layer");
+  if (existing) existing.remove();
+
+  const layer = document.createElement("div");
+  layer.className = "bet-slip-modal-layer user-detail-layer";
+  layer.innerHTML = `
+    <div class="bet-slip-modal user-detail-modal" role="dialog" aria-modal="true">
+      <div class="bet-slip-modal-head">
+        <div>
+          <span>User Detail</span>
+          <strong>${simpleValue(user.name || username)}</strong>
+        </div>
+        <button type="button" class="user-detail-close">×</button>
+      </div>
+      <div class="bet-slip-modal-body">
+        <div class="betting-head user-detail-stats">
+          <div><span>Username</span><strong>${simpleValue(username)}</strong></div>
+          <div><span>Balance</span><strong>${displayMoney(summary.balance || user.balance || 0)}</strong></div>
+          <div><span>Exposure</span><strong>${displayMoney(summary.exposure || user.exposure || 0)}</strong></div>
+          <div><span>P/L</span><strong class="${pnl < 0 ? "loss" : "profit"}">${pnl < 0 ? "-" : "+"}${displayMoney(Math.abs(pnl))}</strong></div>
+          <div><span>Pending Bets</span><strong>${pending.length}</strong></div>
+          <div><span>Settled Bets</span><strong>${settled.length}</strong></div>
+          <div><span>Last Login</span><strong>${formatDateTime(user.lastLoginAt)}</strong></div>
+          <div><span>Last Seen</span><strong>${formatDateTime(user.lastSeenAt)}</strong></div>
+        </div>
+        <div class="ledger-table-wrap">
+          <h3>Funds (${funds.length})</h3>
+          <table class="ledger-table">
+            <thead><tr><th>Type</th><th>Amount</th><th>Before</th><th>After</th><th>By</th><th>Time</th></tr></thead>
+            <tbody>
+              ${funds.map((row) => `
+                <tr>
+                  <td class="${row.mode === "REMOVE" ? "loss" : "profit"}">${simpleValue(row.mode)}</td>
+                  <td class="${row.mode === "REMOVE" ? "loss" : "profit"}">${row.mode === "REMOVE" ? "-" : "+"}${displayMoney(row.amount)}</td>
+                  <td>${displayMoney(row.balanceBefore)}</td>
+                  <td>${displayMoney(row.balanceAfter)}</td>
+                  <td>${simpleValue(row.createdBy || "-")}</td>
+                  <td>${formatDateTime(row.createdAt)}</td>
+                </tr>
+              `).join("") || '<tr><td colspan="6">No fund entries.</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+        <div class="ledger-table-wrap">
+          <h3>Bets (${bets.length})</h3>
+          <table class="ledger-table">
+            <thead><tr><th>Match</th><th>Market</th><th>Side</th><th>Run</th><th>Rate</th><th>Stake</th><th>Status</th><th>Result</th><th>P&L</th><th>Time</th></tr></thead>
+            <tbody>
+              ${bets.map((bet) => `
+                <tr>
+                  <td>${simpleValue(bet.eventName)}</td>
+                  <td>${simpleValue(bet.marketName)}</td>
+                  <td>${simpleValue(bet.side)}</td>
+                  <td>${betRunDisplay(bet)}</td>
+                  <td>${betRateDisplay(bet)}</td>
+                  <td>${displayMoney(bet.stake)}</td>
+                  <td>${simpleValue(betStatusValue(bet))}</td>
+                  <td>${betResultRunDisplay(bet)}</td>
+                  <td>${betPnlDisplay(bet, false)}</td>
+                  <td>${formatDateTime(bet.placedAt)}</td>
+                </tr>
+              `).join("") || '<tr><td colspan="10">No bets for this user.</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  `;
+  layer.querySelector(".user-detail-close").addEventListener("click", () => layer.remove());
+  layer.addEventListener("click", (event) => {
+    if (event.target === layer) layer.remove();
+  });
+  document.body.append(layer);
 }
 
 function accountMetrics() {
@@ -3119,6 +3226,7 @@ function createBettingPanel() {
     .filter((bet) => isMaster || String(bet.username).toLowerCase() === String(session.username).toLowerCase())
     .reverse();
   const reportRows = matchReportRows(myBets, isMaster);
+  const fundRows = visibleFundLedgerRows(isMaster);
 
   section.innerHTML = `
     <div class="betting-head">
@@ -3141,7 +3249,7 @@ function createBettingPanel() {
         <div class="ledger-table-wrap">
           <h3>User Performance</h3>
           <table class="ledger-table">
-            <thead><tr><th>User</th><th>Online</th><th>Last Login</th><th>Last Seen</th><th>Balance</th><th>Stake</th><th>Exposure</th><th>P/L</th><th>Bets</th><th>Funds</th></tr></thead>
+            <thead><tr><th>User</th><th>Online</th><th>Last Login</th><th>Last Seen</th><th>Balance</th><th>Stake</th><th>Exposure</th><th>P/L</th><th>Bets</th><th>Details</th><th>Funds</th></tr></thead>
             <tbody>
               ${performanceRows.map((row) => `
                 <tr>
@@ -3154,12 +3262,13 @@ function createBettingPanel() {
                   <td>${displayMoney(row.exposure)}</td>
                   <td class="${Number(row.pnl || 0) < 0 ? "loss" : "profit"}">${displayMoney(row.pnl)}</td>
                   <td>${simpleValue(row.betCount)}</td>
+                  <td><button type="button" class="user-detail-btn" data-user="${simpleValue(row.username)}">View</button></td>
                   <td>
                     <button type="button" class="fund-btn" data-user="${simpleValue(row.username)}" data-mode="ADD">Add</button>
                     <button type="button" class="fund-btn remove" data-user="${simpleValue(row.username)}" data-mode="REMOVE">Remove</button>
                   </td>
                 </tr>
-              `).join("") || '<tr><td colspan="10">No users yet.</td></tr>'}
+              `).join("") || '<tr><td colspan="11">No users yet.</td></tr>'}
             </tbody>
           </table>
         </div>
@@ -3178,6 +3287,25 @@ function createBettingPanel() {
               <td class="${Number(row.pnl || 0) < 0 ? "loss" : "profit"}">${Number(row.pnl || 0) < 0 ? "-" : "+"}${displayMoney(Math.abs(Number(row.pnl || 0)))}</td>
             </tr>
           `).join("") || '<tr><td colspan="4">No match report yet.</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+    <div class="ledger-table-wrap">
+      <h3>Funds Ledger (${fundRows.length})</h3>
+      <table class="ledger-table">
+        <thead><tr>${isMaster ? "<th>User</th>" : ""}<th>Type</th><th>Amount</th><th>Before</th><th>After</th><th>By</th><th>Time</th></tr></thead>
+        <tbody>
+          ${fundRows.map((row) => `
+            <tr>
+              ${isMaster ? `<td>${simpleValue(row.username)}</td>` : ""}
+              <td class="${row.mode === "REMOVE" ? "loss" : "profit"}">${simpleValue(row.mode)}</td>
+              <td class="${row.mode === "REMOVE" ? "loss" : "profit"}">${row.mode === "REMOVE" ? "-" : "+"}${displayMoney(row.amount)}</td>
+              <td>${displayMoney(row.balanceBefore)}</td>
+              <td>${displayMoney(row.balanceAfter)}</td>
+              <td>${simpleValue(row.createdBy || "-")}</td>
+              <td>${formatDateTime(row.createdAt)}</td>
+            </tr>
+          `).join("") || `<tr><td colspan="${isMaster ? 7 : 6}">No fund entries yet.</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -3219,6 +3347,9 @@ function createBettingPanel() {
   section.querySelector(".create-user-btn")?.addEventListener("click", createUserFromPrompt);
   section.querySelectorAll(".fund-btn").forEach((button) => {
     button.addEventListener("click", () => adjustUserFunds(button.dataset.user, button.dataset.mode));
+  });
+  section.querySelectorAll(".user-detail-btn").forEach((button) => {
+    button.addEventListener("click", () => showUserDetailModal(button.dataset.user));
   });
   section.querySelectorAll(".settle-btn").forEach((button) => {
     button.addEventListener("click", () => settleBet(button.dataset.betId, button.dataset.result));
@@ -3319,7 +3450,9 @@ async function startSupabaseRealtime() {
 
   supabaseRealtime.channel = supabaseRealtime.client
     .channel("fair91-ledger")
+    .on("postgres_changes", { event: "*", schema: "public", table: "users" }, refreshLedger)
     .on("postgres_changes", { event: "*", schema: "public", table: "bets" }, refreshLedger)
+    .on("postgres_changes", { event: "*", schema: "public", table: "fund_ledger" }, refreshLedger)
     .on("postgres_changes", { event: "*", schema: "public", table: "manual_odds_overrides" }, refreshManualOdds)
     .on("postgres_changes", { event: "*", schema: "public", table: "app_messages" }, refreshMessage)
     .subscribe();

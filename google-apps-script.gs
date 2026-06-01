@@ -2,6 +2,7 @@ const SHEETS = {
   login: "Login Details",
   users: "User Ledger",
   bets: "Bet Ledger",
+  funds: "Fund Ledger",
   rowStats: "Row Stats"
 };
 
@@ -9,6 +10,7 @@ const HEADERS = {
   login: ["username", "password", "name", "role"],
   users: ["username", "password", "name", "role", "balance", "exposure", "createdAt", "lastLoginAt", "lastSeenAt", "isOnline"],
   bets: ["id", "username", "eventId", "eventName", "marketKey", "marketName", "marketType", "side", "odds", "run", "target", "rate", "stake", "liability", "estimatedProfit", "status", "result", "resultRun", "pnl", "placedAt", "settledAt", "statusAtSelection", "verifiedAt"],
+  funds: ["id", "username", "mode", "amount", "balanceBefore", "balanceAfter", "createdBy", "createdAt"],
   rowStats: ["eventId", "rowKey", "min", "max", "updatedAt"]
 };
 
@@ -45,6 +47,7 @@ function ensureSheets() {
   ensureSheet(SHEETS.login, HEADERS.login);
   ensureSheet(SHEETS.users, HEADERS.users);
   ensureSheet(SHEETS.bets, HEADERS.bets);
+  ensureSheet(SHEETS.funds, HEADERS.funds);
   ensureSheet(SHEETS.rowStats, HEADERS.rowStats);
 }
 
@@ -245,6 +248,7 @@ function updateRowStats(payload) {
 function publicLedger() {
   const users = readRows(SHEETS.users, HEADERS.users);
   const bets = readRows(SHEETS.bets, HEADERS.bets);
+  const funds = readRows(SHEETS.funds, HEADERS.funds);
   const summary = users.map((user) => {
     const userBets = bets.filter((bet) => String(bet.username).toLowerCase() === String(user.username).toLowerCase());
     const pending = userBets.filter((bet) => bet.status === "PENDING");
@@ -271,6 +275,7 @@ function publicLedger() {
   return {
     users: users.map((user) => ({ username: user.username, name: user.name, role: user.role, balance: user.balance, exposure: user.exposure, createdAt: user.createdAt, lastLoginAt: user.lastLoginAt, lastSeenAt: user.lastSeenAt, isOnline: user.isOnline })),
     bets,
+    fundLedger: funds.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || ""))),
     summary
   };
 }
@@ -305,6 +310,16 @@ function createUser(payload) {
     const user = { username, password, name, role: "user", balance, exposure: 0, createdAt: new Date().toISOString() };
     appendRecord(SHEETS.users, HEADERS.users, user);
     appendRecord(SHEETS.login, HEADERS.login, { username, password, name, role: "user" });
+    appendRecord(SHEETS.funds, HEADERS.funds, {
+      id: Utilities.getUuid(),
+      username,
+      mode: "OPENING",
+      amount: balance,
+      balanceBefore: 0,
+      balanceAfter: balance,
+      createdBy: payload.updatedBy || payload.createdBy || "",
+      createdAt: new Date().toISOString()
+    });
     return { user: { username, name, role: "user", balance } };
   } finally {
     lock.releaseLock();
@@ -354,6 +369,16 @@ function adjustFunds(payload) {
 
     user.balance = Number(nextBalance.toFixed(2));
     writeRecord(SHEETS.users, HEADERS.users, user._row, user);
+    appendRecord(SHEETS.funds, HEADERS.funds, {
+      id: Utilities.getUuid(),
+      username: user.username,
+      mode,
+      amount,
+      balanceBefore: balance,
+      balanceAfter: user.balance,
+      createdBy: payload.updatedBy || payload.createdBy || "",
+      createdAt: new Date().toISOString()
+    });
     return { user: { username: user.username, name: user.name, role: user.role, balance: user.balance }, ledger: publicLedger() };
   } finally {
     lock.releaseLock();

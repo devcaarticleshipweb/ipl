@@ -167,6 +167,7 @@ function Handle-SheetsBackedApi {
       "/api/betting-ledger" { "getLedger"; break }
       "/api/betting-auth" { "auth"; break }
       "/api/betting-users" { "createUser"; break }
+      "/api/funds" { "adjustFunds"; break }
       "/api/bets" { "placeBet"; break }
       "/api/bets/settle" { "settleBet"; break }
       default { "" }
@@ -304,19 +305,20 @@ function Handle-RowStatsApi {
 
 function Get-BettingLedger {
   if (-not (Test-Path -LiteralPath $BettingLedgerFile -PathType Leaf)) {
-    return @{ users = @(); bets = @() }
+    return @{ users = @(); bets = @(); fundLedger = @() }
   }
 
   try {
     $Ledger = ConvertTo-Hashtable ((Get-Content -LiteralPath $BettingLedgerFile -Raw) | ConvertFrom-Json)
     if ($null -eq $Ledger -or $Ledger -isnot [System.Collections.IDictionary]) {
-      return @{ users = @(); bets = @() }
+      return @{ users = @(); bets = @(); fundLedger = @() }
     }
     if (-not $Ledger.ContainsKey("users") -or $null -eq $Ledger["users"]) { $Ledger["users"] = @() }
     if (-not $Ledger.ContainsKey("bets") -or $null -eq $Ledger["bets"]) { $Ledger["bets"] = @() }
+    if (-not $Ledger.ContainsKey("fundLedger") -or $null -eq $Ledger["fundLedger"]) { $Ledger["fundLedger"] = @() }
     return $Ledger
   } catch {
-    return @{ users = @(); bets = @() }
+    return @{ users = @(); bets = @(); fundLedger = @() }
   }
 }
 
@@ -504,6 +506,7 @@ function Get-PublicLedger {
   return @{
     users = $SafeUsers
     bets = $Bets
+    fundLedger = @($Ledger["fundLedger"])
     summary = $Summary
   }
 }
@@ -571,6 +574,19 @@ function Handle-BettingUsersApi {
       createdAt = (Get-Date).ToUniversalTime().ToString("o")
     }
     $Ledger["users"] = @($Users + $User)
+    $CreatedAt = (Get-Date).ToUniversalTime().ToString("o")
+    $FundLedger = @($Ledger["fundLedger"])
+    $FundLedger += [ordered]@{
+      id = [Guid]::NewGuid().ToString()
+      username = $Username
+      mode = "OPENING"
+      amount = $Balance
+      balanceBefore = 0
+      balanceAfter = $Balance
+      createdBy = if ([string]::IsNullOrWhiteSpace([string]$Body.updatedBy)) { [string]$Body.createdBy } else { [string]$Body.updatedBy }
+      createdAt = $CreatedAt
+    }
+    $Ledger["fundLedger"] = $FundLedger
     Save-BettingLedger -Ledger $Ledger
 
     Write-Json -Response $Response -StatusCode 200 -Payload @{ user = [ordered]@{ username = $Username; name = $Name; role = "user"; balance = $Balance } }
